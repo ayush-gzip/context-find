@@ -86,7 +86,6 @@ function isDir(path: string): boolean {
 
 type Found = [path: string, source: Source];
 
-/** Every transcript this machine can offer, tagged with which agent wrote it. */
 export function transcripts(root?: string): Found[] {
   if (root) {
     const paths: string[] = [];
@@ -109,7 +108,6 @@ export function transcripts(root?: string): Found[] {
   return found;
 }
 
-/** How many conversations each agent left here, and when the last one was. */
 export function conversationCounts(): Record<string, number> {
   const tally: Record<string, number> = { claude: 0, codex: 0, last: 0 };
   for (const [path, source] of transcripts()) {
@@ -121,7 +119,6 @@ export function conversationCounts(): Record<string, number> {
   return tally;
 }
 
-/** Rough age of a timestamp */
 export function relativeTime(stamp?: number, now?: number): string {
   if (!stamp) return "never";
   const gap = Math.max((now ?? Date.now() / 1000) - stamp, 0);
@@ -170,9 +167,10 @@ function walk(dir: string, found: string[]): void {
   }
   for (const item of items) {
     const path = join(dir, item.name);
-    // subagent sidechains have no session of their own to resume
+    // subagent sidechains have no session of their own to resume; claude-mem's
+    // observer sessions are bot chatter under ~/.claude-mem, not real conversations
     if (item.isDirectory()) {
-      if (item.name !== "subagents") walk(path, found);
+      if (item.name !== "subagents" && !item.name.includes("claude-mem-observer-sessions")) walk(path, found);
     } else if (item.name.endsWith(".jsonl")) {
       found.push(path);
     }
@@ -254,7 +252,6 @@ function codexHeader(path: string): Header | null {
   return cwd ? [cwd, "-", "(no prompt text)", sid] : null;
 }
 
-/** Strip Claude's injected `<system-reminder>` spans from a user turn. */
 function stripReminders(text: string): string {
   return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, " ");
 }
@@ -383,7 +380,6 @@ function wrap(text: string, width: number): string[] {
   return lines.length ? lines : [""];
 }
 
-/** Transcript as styled lines, ready to print. */
 export function renderTranscript(path: string, width = 100, showAll = false, asciiOnly = false,
                        source?: Source): Line[] {
   if ((source ?? detectSource(path)) === "codex") {
@@ -512,9 +508,8 @@ function renderCodex(path: string, width: number, showAll: boolean,
   return out.length ? out : [["meta", "(nothing to show)"]];
 }
 
-/** Display path with the home directory collapsed, forward slashes throughout. */
 export function prettyPath(cwd: string): string {
-  const home = homedir().split(sep).join("/");
-  const folder = cwd.split("\\").join("/");
+  const home = sanitizeTerminalText(homedir()).split(sep).join("/");
+  const folder = sanitizeTerminalText(cwd).split("\\").join("/");
   return folder.startsWith(home) ? "~" + folder.slice(home.length) : folder;
 }

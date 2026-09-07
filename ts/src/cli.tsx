@@ -10,6 +10,7 @@ import React from "react";
 import { Box, Text, render as renderInk, useApp, useInput } from "ink";
 
 import { App } from "./ui.tsx";
+import { printTerminalText, printTerminalError } from "./terminal.ts";
 import { debug } from "./debug.ts";
 import { Search } from "./search.ts";
 import {
@@ -100,9 +101,9 @@ function resumeSession(session: Session): number {
     debug(
       `${location} resume failed to start: source=${session.source}, status=127`,
     );
-    console.log(
+    printTerminalText(
       `${argv[0]} not found on PATH. Run this yourself:\n` +
-        `  cd ${session.cwd} && ${argv.join(" ")} ${id}`,
+        `  cd ${quoteForPosixShell(session.cwd)} && ${argv.join(" ")} ${quoteForPosixShell(id)}`,
     );
     return 127;
   }
@@ -168,12 +169,12 @@ async function printMachineTable(hosts: string[]): Promise<number> {
       .join(" │ ") +
     " │";
 
-  console.log("\n  machines context-find can search\n");
-  console.log("  " + line("╭", "┬", "╮"));
-  console.log("  " + rule(heads));
-  console.log("  " + line("├", "┼", "┤"));
-  for (const cells of body) console.log("  " + rule(cells));
-  console.log("  " + line("╰", "┴", "╯"));
+  printTerminalText("\n  machines context-find can search\n");
+  printTerminalText("  " + line("╭", "┬", "╮"));
+  printTerminalText("  " + rule(heads));
+  printTerminalText("  " + line("├", "┼", "┤"));
+  for (const cells of body) printTerminalText("  " + rule(cells));
+  printTerminalText("  " + line("╰", "┴", "╯"));
 
   const total = body
     .filter((c) => c[3] !== "-")
@@ -182,12 +183,12 @@ async function printMachineTable(hosts: string[]): Promise<number> {
   debug(
     `machine list finished: conversations=${total}, reachable=${reachable}, unreachable=${notes.length}`,
   );
-  console.log(
+  printTerminalText(
     `\n  ${total} conversations across ${reachable} machine${reachable === 1 ? "" : "s"}`,
   );
   for (const [name, error] of notes)
-    console.log(`  ${name} did not answer: ${error}`);
-  console.log();
+    printTerminalText(`  ${name} did not answer: ${error}`);
+  printTerminalText();
   return notes.length ? 1 : 0;
 }
 
@@ -202,10 +203,10 @@ function printSessionList(
       `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ` +
       `${pad(at.getHours())}:${pad(at.getMinutes())}`;
     const label = session.host ? hostDisplayName(session.host) + ":" : "";
-    console.log(
+    printTerminalText(
       `${when}  ${session.source.padEnd(6)}  ${label}${prettyPath(session.cwd)}  [${session.branch}]`,
     );
-    console.log(`  ${sanitizeTerminalText(session.summary).slice(0, 120)}`);
+    printTerminalText(`  ${sanitizeTerminalText(session.summary).slice(0, 120)}`);
     const id = sessionId(session);
     const argv = agentResumeArgv(session.source);
     if (session.host) {
@@ -213,24 +214,23 @@ function printSessionList(
       const cmd = isWindows
         ? buildResumeCommand(session.host, session.cwd, id, argv)
         : `cd ${quoteForPosixShell(session.cwd)} && ${argv.join(" ")} ${quoteForPosixShell(id)}`;
-      console.log(
+      printTerminalText(
         `  ssh -t ${hostDisplayName(session.host)} ${quoteForPosixShell(cmd)}\n`,
       );
     } else {
-      console.log(
+      printTerminalText(
         `  cd ${quoteForPosixShell(session.cwd)} && ${argv.join(" ")} ${quoteForPosixShell(id)}\n`,
       );
     }
   }
-  for (const [host, message] of errors) console.error(`! ${host}: ${message}`);
+  for (const [host, message] of errors) printTerminalError(`! ${host}: ${message}`);
 }
 
-/** Enough for an agent to pick a session and show it. */
 function printSessionsJson(
   sessions: Session[],
   errors: [string, string][],
 ): void {
-  console.log(
+  printTerminalText(
     JSON.stringify(
       {
         sessions: sessions.map((s) => ({
@@ -248,6 +248,8 @@ function printSessionsJson(
       },
       null,
       2,
+    ).replace(/[\u007f-\u009f]/g, (char) =>
+      "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0"),
     ),
   );
 }
@@ -258,25 +260,25 @@ async function printSessionTranscript(
   width: number,
 ): Promise<number> {
   if (!path) {
-    console.error("usage: context-find show <path> [--host SSH]");
+    printTerminalError("usage: context-find show <path> [--host SSH]");
     return 1;
   }
   try {
     const lines: Line[] = host
       ? await renderRemoteTranscript(host, path, width, true, false)
       : renderTranscript(path, width, true, false);
-    for (const [, text] of lines) console.log(sanitizeTerminalText(text));
+    for (const [, text] of lines) printTerminalText(sanitizeTerminalText(text));
     return 0;
   } catch (error) {
-    console.error((error as Error).message);
+    printTerminalError((error as Error).message);
     return 1;
   }
 }
 
 function printNothingFound(query: string): number {
-  if (query) console.log(`no conversations matching '${query}'`);
+  if (query) printTerminalText(`no conversations matching '${query}'`);
   else
-    console.log(
+    printTerminalText(
       `no conversations under ${projectsRoots().join(", ") || "no store found"}`,
     );
   return 1;
@@ -344,12 +346,12 @@ async function onboardExternalHost(): Promise<number> {
     ).trim();
     if (!target) {
       debug("external onboarding rejected an empty target");
-      console.error("need a non-empty ssh target");
+      printTerminalError("need a non-empty ssh target");
       return 1;
     }
     if (readHosts().some((spec) => hostDisplayName(spec) === target)) {
       debug("external onboarding skipped an existing host");
-      console.log(`${target} is already in ${HOSTS_FILE}`);
+      printTerminalText(`${target} is already in ${HOSTS_FILE}`);
       return 0;
     }
     const keyFile = (
@@ -361,7 +363,7 @@ async function onboardExternalHost(): Promise<number> {
         : keyFile;
       if (!existsSync(expanded)) {
         debug("external onboarding key file was not found");
-        console.error(`warning: no file at ${expanded}, adding anyway`);
+        printTerminalError(`warning: no file at ${expanded}, adding anyway`);
       }
     }
     const python = (
@@ -380,7 +382,7 @@ async function onboardExternalHost(): Promise<number> {
     debug(
       `external onboarding finished: os=${os}, python=${python ? "pinned" : "auto"}`,
     );
-    console.log(`added to ${HOSTS_FILE}:\n  ${spec}`);
+    printTerminalText(`added to ${HOSTS_FILE}:\n  ${spec}`);
     return 0;
   } finally {
     rl.close();
@@ -418,12 +420,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     mkdirSync(dirname(logFile), { recursive: true });
     writeFileSync(logFile, "");
     process.env["CONTEXT_FIND_DEBUG_FILE"] = logFile;
-    console.error(`[cfind] debug log: ${logFile}`);
+    printTerminalError(`[cfind] debug log: ${logFile}`);
     debug("application diagnostics enabled");
   }
 
   if (values.help) {
-    console.log(USAGE);
+    printTerminalText(USAGE);
     return 0;
   }
 
@@ -485,7 +487,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (!search.sessions.length) {
       for (const [host, message] of search.errors)
-        console.error(`! ${host}: ${message}`);
+        printTerminalError(`! ${host}: ${message}`);
       return printNothingFound(query);
     }
     printSessionList(search.sessions, search.errors);
@@ -519,6 +521,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 main()
   .then((code) => process.exit(code))
   .catch((error: Error) => {
-    console.error(error.message);
+    printTerminalError(error.message);
     process.exit(1);
   });

@@ -223,7 +223,6 @@ export function serveWeb(hosts: string[], port: number): Promise<number> {
   });
 }
 
-// Single self-contained page. Vanilla JS, terminal palette to match the TUI.
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>context-find</title>
 <style>
@@ -304,7 +303,7 @@ const err = document.getElementById("err");
 const q = document.getElementById("q");
 let rows = [], sel = -1;
 
-function esc(s){ return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function esc(s){ return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
 async function search(){
   err.textContent = "searching...";
@@ -367,7 +366,6 @@ async function machines(){
   } catch(e){ reader.innerHTML = '<div id="hint">'+esc(String(e))+'</div>'; }
 }
 
-// ── In-conversation search ──────────────────────────────────────────────
 const rsearch = document.getElementById("rsearch");
 const rq = document.getElementById("rq");
 const rinfo = document.getElementById("rinfo");
@@ -395,9 +393,7 @@ function rHighlight(){
   const needle = rq.value.trim();
   rClear();
   if (!needle) return;
-  // Save original content before we mutate it
   readerRaw = reader.innerHTML;
-  // Walk text nodes and wrap matches
   const escaped = needle.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
   const re = new RegExp("(" + escaped + ")", "gi");
   const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);

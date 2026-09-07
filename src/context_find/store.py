@@ -94,16 +94,20 @@ class Session:
 
 # --- discovery -------------------------------------------------------------
 
+def _real_conversation(p):
+    # subagent sidechains have no session of their own to resume; claude-mem's
+    # observer sessions are bot chatter under ~/.claude-mem, not real conversations
+    return "subagents" not in p.parts and "claude-mem-observer-sessions" not in str(p)
+
+
 def transcripts(root=None):
-    """[(path, source)] for every transcript this machine can offer."""
     if root:
         return [(p, "claude") for p in Path(root).rglob("*.jsonl")
-                if "subagents" not in p.parts]
+                if _real_conversation(p)]
     found = []
     for base in projects_roots():
-        # subagent sidechains have no session of their own to resume
         found += [(p, "claude") for p in base.rglob("*.jsonl")
-                  if "subagents" not in p.parts]
+                  if _real_conversation(p)]
     for base in codex_roots():
         found += [(p, "codex") for p in base.rglob("rollout-*.jsonl")]
     return found
@@ -217,7 +221,6 @@ def search_local_transcripts(query="", root=None):
 
 
 def conversation_counts():
-    """How many conversations each agent left here, and when the last one was."""
     tally = {"claude": 0, "codex": 0, "last": 0.0}
     for path, source in transcripts():
         tally[source] = tally.get(source, 0) + 1
@@ -229,7 +232,6 @@ def conversation_counts():
 
 
 def relative_time(stamp, now=None):
-    """Rough age of a timestamp, for humans."""
     if not stamp:
         return "never"
     gap = max((now or time.time()) - stamp, 0)
@@ -409,6 +411,27 @@ def _render_codex(path, width, show_all, ascii_only):
     return out or [("meta", "(nothing to show)")]
 
 
+def _within_roots(path):
+    """True if path resolves inside a configured transcript store.
+
+    Guards the --render entry point: the path arrives from the controlling
+    machine, so it must not escape the transcript directories - symlinks and
+    ../ included. Mirror of isPathContained + realpath in web.ts.
+    """
+    try:
+        target = Path(path).resolve()
+    except OSError:
+        return False
+    for root in projects_roots() + codex_roots():
+        try:
+            root_real = root.resolve()
+        except OSError:
+            continue
+        if target == root_real or root_real in target.parents:
+            return True
+    return False
+
+
 def _remote_main(argv):
     """Entry point used when this file is piped to a remote interpreter."""
     if argv and argv[0] == "--args-base64":
@@ -422,6 +445,8 @@ def _remote_main(argv):
             rows.append(row)
         json.dump(rows, sys.stdout)
     elif argv[0] == "--render":
+        if not _within_roots(argv[1]):
+            raise SystemExit("path outside transcript stores")
         json.dump(render_transcript(argv[1], int(argv[2]), argv[3] == "1", argv[4] == "1"),
                   sys.stdout)
     elif argv[0] == "--conversation-counts":
