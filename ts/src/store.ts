@@ -256,11 +256,11 @@ function stripReminders(text: string): string {
   return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, " ");
 }
 
-/** Lowercased text of the real conversation only - what the human typed and what
- *  the agent replied. Tool output, reasoning, and every injected block (skill
- *  catalogs, system reminders, session boilerplate) are left out, so a search for
+/** Text of the real conversation only - what the human typed and what the agent
+ *  replied. Tool output, reasoning, and every injected block (skill catalogs,
+ *  system reminders, session boilerplate) are left out, so a search for
  *  "elastic" finds sessions that actually discuss it, not ones that merely carry
- *  the aws-containers skill blurb. */
+ *  the aws-containers skill blurb. Original case; callers lowercase to match. */
 function searchText(path: string, source: Source): string {
   const parts: string[] = [];
   if (source === "codex") {
@@ -284,7 +284,24 @@ function searchText(path: string, source: Source): string {
       parts.push(t);
     }
   }
-  return parts.join("\n").toLowerCase();
+  return parts.join("\n");
+}
+
+/** The line the query sits on, whitespace-collapsed and windowed to ~140 chars
+ *  around the hit, for the row preview. Kept identical to store.py _snippet. */
+function matchSnippet(text: string, needle: string): string | null {
+  const i = text.toLowerCase().indexOf(needle);
+  if (i < 0) return null;
+  const start = text.lastIndexOf("\n", i) + 1;
+  let end = text.indexOf("\n", i);
+  if (end < 0) end = text.length;
+  const line = text.slice(start, end).replace(/\s+/g, " ").trim();
+  const MAX = 140;
+  if (line.length <= MAX) return sanitizeTerminalText(line);
+  const at = line.toLowerCase().indexOf(needle);
+  const from = Math.max(0, at - 40);
+  const clip = line.slice(from, from + MAX);
+  return sanitizeTerminalText((from > 0 ? "…" : "") + clip + (from + MAX < line.length ? "…" : ""));
 }
 
 export function searchLocalTranscripts(query = "", root?: string): Session[] {
@@ -296,9 +313,14 @@ export function searchLocalTranscripts(query = "", root?: string): Session[] {
   let errors = 0;
   for (const [path, source] of candidates) {
     try {
-      if (needle && !searchText(path, source).includes(needle)) {
-        skipped += 1;
-        continue;
+      let summary: string | null = null;
+      if (needle) {
+        const text = searchText(path, source);
+        if (!text.toLowerCase().includes(needle)) {
+          skipped += 1;
+          continue;
+        }
+        summary = matchSnippet(text, needle);
       }
       const head = header(path, source);
       if (!head) {
@@ -306,7 +328,7 @@ export function searchLocalTranscripts(query = "", root?: string): Session[] {
         continue;
       }
       found.push({
-        path, cwd: head[0], branch: head[1], summary: head[2],
+        path, cwd: head[0], branch: head[1], summary: summary ?? head[2],
         mtime: statSync(path).mtimeMs / 1000, host: null, source, sid: head[3],
       });
     } catch {

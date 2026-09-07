@@ -165,11 +165,11 @@ _REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
 
 def _search_text(path, source):
-    """Lowercased bytes of the real conversation only - what the human typed and
-    what the agent replied. Tool output, reasoning, and injected blocks (skill
-    catalogs, system reminders, session boilerplate) are excluded, so a search
-    finds sessions that actually discuss a term, not ones that merely carry the
-    skill blurb that mentions it."""
+    """Text of the real conversation only - what the human typed and what the
+    agent replied. Tool output, reasoning, and injected blocks (skill catalogs,
+    system reminders, session boilerplate) are excluded, so a search finds
+    sessions that actually discuss a term, not ones that merely carry the skill
+    blurb that mentions it. Original case; callers lowercase to match."""
     parts = []
     if source == "codex":
         for entry in entries(path):
@@ -195,17 +195,44 @@ def _search_text(path, source):
                 if not t or t.startswith(SKIP_PREFIXES):
                     continue
             parts.append(t)
-    return "\n".join(parts).lower().encode("utf-8", "replace")
+    return "\n".join(parts)
+
+
+def _snippet(text, needle):
+    """The line the query sits on, whitespace-collapsed and windowed to ~140
+    chars around the hit, for the row preview. Kept identical to store.ts
+    matchSnippet."""
+    lower = text.lower()
+    i = lower.find(needle)
+    if i < 0:
+        return None
+    start = lower.rfind("\n", 0, i) + 1
+    end = lower.find("\n", i)
+    if end < 0:
+        end = len(text)
+    line = " ".join(text[start:end].split())
+    limit = 140
+    if len(line) <= limit:
+        return sanitize_terminal_text(line)
+    at = line.lower().find(needle)
+    frm = max(0, at - 40)
+    clip = line[frm:frm + limit]
+    return sanitize_terminal_text(
+        ("…" if frm > 0 else "") + clip + ("…" if frm + limit < len(line) else ""))
 
 
 def search_local_transcripts(query="", root=None):
     """Sessions whose transcript contains query, newest activity first."""
-    needle = query.lower().encode("utf-8", "replace")
+    needle = query.lower()
     found = []
     for path, source in transcripts(root):
         try:
-            if needle and needle not in _search_text(path, source):
-                continue
+            summary = None
+            if needle:
+                text = _search_text(path, source)
+                if needle not in text.lower():
+                    continue
+                summary = _snippet(text, needle)
             head = header(path, source)
         except Exception:
             continue
@@ -214,7 +241,7 @@ def search_local_transcripts(query="", root=None):
                 mtime = path.stat().st_mtime
             except OSError:
                 continue
-            found.append(Session(str(path), head[0], head[1], head[2],
+            found.append(Session(str(path), head[0], head[1], summary or head[2],
                                  mtime, source=source, sid=head[3]))
     found.sort(key=lambda s: s.mtime, reverse=True)
     return found
