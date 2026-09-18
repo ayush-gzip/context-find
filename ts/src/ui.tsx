@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 
-import { relativeTime, conversationCounts, prettyPath, renderTranscript, type Line, type Session, type Style } from "./store.ts";
+import { relativeTime, conversationCounts, prettyPath, renderTranscript, sanitizeTerminalText, type Line, type Session, type Style } from "./store.ts";
 import { remoteConversationCounts, hostDisplayName, lastPingedAt, recordPing, renderRemoteTranscript } from "./remote.ts";
 import { clamp, COLUMN_WIDTHS, listAction, machineRow, machineLine, sessionRow, clampScrollTop,
          tableHeader, verticalMotion } from "./rows.ts";
@@ -152,23 +152,23 @@ function List({ search, title, version, wanted, deepPending, deepQuery, onDeep,
         : null}
       {showLogo ? <Text> </Text> : null}
       <Text wrap="truncate">
-        <Text dimColor> {title}  </Text>
+        <Text dimColor> {sanitizeTerminalText(title)}  </Text>
         <Text dimColor>
           {shown.length}/{search.sessions.length}
         </Text>
-        {deepQuery ? <Text color="green">  deep “{deepQuery}”</Text> : null}
+        {deepQuery ? <Text color="green">  deep “{sanitizeTerminalText(deepQuery)}”</Text> : null}
         {deepPending ? (
           <Text color="magentaBright">  searching…</Text>
         ) : search.pending.length ? (
-          <Text color="magentaBright">  searching {search.pending.join(", ")}…</Text>
+          <Text color="magentaBright">  searching {sanitizeTerminalText(search.pending.join(", "))}…</Text>
         ) : null}
       </Text>
       <Text wrap="truncate">
         <Text color="magenta" bold> search </Text>
-        <Text>{filter}{searching ? "▌" : ""}</Text>
+        <Text>{sanitizeTerminalText(filter)}{searching ? "▌" : ""}</Text>
       </Text>
       {search.errors.map(([host, message]) => (
-        <Text key={host} color="red" wrap="truncate"> {host}: {message}</Text>
+        <Text key={host} color="red" wrap="truncate"> {sanitizeTerminalText(host)}: {sanitizeTerminalText(message)}</Text>
       ))}
       <Text dimColor wrap="truncate">
         {searching
@@ -257,7 +257,7 @@ function Machines({ hosts, onBack }: { hosts: string[]; onBack: () => void }) {
       ))}
       {rows.filter((row) => row.error).map((row) => (
         <Text key={row.spec + ":error"} color="red" wrap="truncate">
-          {` ${row.name}: ${row.error}`}
+          {sanitizeTerminalText(` ${row.name}: ${row.error}`)}
         </Text>
       ))}
     </Box>
@@ -322,7 +322,7 @@ function Reader({ session, onBack, onResume }: {
   return (
     <Box flexDirection="column" width={columns}>
       <Text wrap="truncate">
-        <Text dimColor> {where}</Text>
+        <Text dimColor> {sanitizeTerminalText(where)}</Text>
         <Text dimColor>   {total} lines</Text>
       </Text>
       <Text dimColor wrap="truncate">
@@ -333,7 +333,7 @@ function Reader({ session, onBack, onResume }: {
       ) : (
         lines.slice(safeTop, safeTop + view).map((line, index) => (
           <Text key={safeTop + index} {...COLOR[line[0]]} dimColor={COLOR[line[0]].dim} wrap="truncate">
-            {line[1] || " "}
+            {sanitizeTerminalText(line[1]) || " "}
           </Text>
         ))
       )}
@@ -369,7 +369,7 @@ function ConfirmRemote({
         }
     });
     
-    const host = hostDisplayName(session.host);
+    const host = sanitizeTerminalText(hostDisplayName(session.host));
 
     return (
         <Box flexDirection="column" width={columns} padding={1}>

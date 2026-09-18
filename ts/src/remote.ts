@@ -122,7 +122,6 @@ export function buildHostSpec(
   return `${ssh} # context-find:os=${os}${p ? ` python=${p}` : ""}`;
 }
 
-/** Creates ~/.context-find if the directory is missing. */
 export function appendHostSpec(spec: string, path = HOSTS_FILE): void {
   mkdirSync(dirname(path), { recursive: true });
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -147,7 +146,6 @@ export function hostDisplayName(spec: string): string {
   return splitSpecTokens(spec)[0] ?? spec;
 }
 
-/** Interpreter pinned in a host spec's `python=` field, or undefined to autodetect. */
 function specPython(spec: string): string | undefined {
   return spec
     .match(/#\s+context-find:os=(?:posix|windows)\s+python=(.+)$/)?.[1]
@@ -195,9 +193,6 @@ export function readAgentSource(): string {
   throw new Error("cannot find store.py to send to the remote host");
 }
 
-/**
- * simple hints for known ssh failures
- */
 export function authHint(stderr: string, target: string): string | undefined {
   if (/host key verification failed/i.test(stderr)) {
     return `run: ssh ${target}  once to accept its host key`;
@@ -405,7 +400,6 @@ export async function renderRemoteTranscript(
   return validateRenderLines(result);
 }
 
-/** Wrap a value in single quotes for a POSIX shell, escaping any it contains. */
 export function quoteForPosixShell(value: string): string {
   return "'" + value.split("'").join(`'"'"'`) + "'";
 }

@@ -1,5 +1,5 @@
 /** Row formatting and scroll maths, kept out of the JSX so they stay testable. */
-import { relativeTime, prettyPath, type Session } from "./store.ts";
+import { relativeTime, prettyPath, sanitizeTerminalText, type Session } from "./store.ts";
 import { hostDisplayName } from "./remote.ts";
 
 interface Cell {
@@ -19,7 +19,6 @@ export const COLUMN_WIDTHS = {
   branch: 10,
 } as const;
 
-/** Keep the cursor inside the visible window. */
 export function clampScrollTop(top: number, cursor: number, view: number): number {
   let next = Math.min(top, cursor);
   if (cursor >= next + view) next = cursor - view + 1;
@@ -83,6 +82,8 @@ export function tableHeader(width: number): string {
 export function machineRow(
   name: string, tally: Record<string, number> | null, status: string,
 ): string[] {
+  name = sanitizeTerminalText(name);
+  status = sanitizeTerminalText(status);
   if (!tally) return [name, "-", "-", "-", "-", status];
   const claude = tally["claude"] ?? 0;
   const codex = tally["codex"] ?? 0;
@@ -91,6 +92,7 @@ export function machineRow(
 }
 
 export function machineLine(cells: string[], width: number): string {
+  cells = cells.map(sanitizeTerminalText);
   const widths = [20, 8, 7, 7, 14];
   const text = cells.slice(0, 5).map((cell, index) => {
     const size = widths[index]! - 1;
@@ -112,16 +114,17 @@ export function sessionRow(session: Session): Cell {
   const maxFolder = COLUMN_WIDTHS.folder - 1;
   if (folder.length > maxFolder) folder = "…" + folder.slice(1 - maxFolder); // keep identifying tail
   const maxBranch = COLUMN_WIDTHS.branch - 1;
-  const branch = session.branch.length > maxBranch
-    ? session.branch.slice(0, maxBranch - 1) + "…"
-    : session.branch;
+  const safeBranch = sanitizeTerminalText(session.branch);
+  const branch = safeBranch.length > maxBranch
+    ? safeBranch.slice(0, maxBranch - 1) + "…"
+    : safeBranch;
 
   return {
     stamp,
-    source: session.source,
-    host: session.host != null ? hostDisplayName(session.host).slice(0, 10) : "local",
+    source: sanitizeTerminalText(session.source),
+    host: session.host != null ? sanitizeTerminalText(hostDisplayName(session.host)).slice(0, 10) : "local",
     folder,
     branch,
-    summary: session.summary,
+    summary: sanitizeTerminalText(session.summary),
   };
 }

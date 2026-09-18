@@ -221,6 +221,26 @@ test("Fix 3: Web server rejects paths in sessions-outside and outside symlinks",
   }
 });
 
+test("Fix 3: store.py --render refuses paths outside the transcript stores", () => {
+  const dir = mkdtempSync(join(tmpdir(), "context-find-render-escape-"));
+  const outside = join(dir, "secret.jsonl");
+  writeFileSync(outside, JSON.stringify({ type: "user", cwd: "/w", message: { content: "s" } }), "utf8");
+
+  // Point both roots at empty dirs so the tmp file is outside every store.
+  const res = spawnSync("python3", [STORE_PY, "--render", outside, "100", "0", "0"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: join(dir, "no-claude"),
+      CODEX_HOME: join(dir, "no-codex"),
+    },
+  });
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /outside transcript stores/);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // ── FIX 4: Untrusted terminal text sanitization and resume quoting ────────────
 
 test("Fix 4: sanitizeTerminalText strips OSC 52 and dangerous control characters", () => {

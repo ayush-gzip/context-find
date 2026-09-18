@@ -17,6 +17,9 @@ Reduce common LLM coding mistakes. Bias toward caution over speed; for trivial t
 
 ### 2. Simplicity First
 
+Keep comments only when the function name and code do not make the behavior
+clear. Explain non-obvious constraints or reasons; do not restate the code.
+
 **Minimum code that solves the problem. Nothing speculative.**
 
 - No features beyond what was asked.

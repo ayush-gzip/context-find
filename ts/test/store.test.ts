@@ -39,6 +39,20 @@ function fixtureRoot(): string {
   return root;
 }
 
+test("discovery skips claude-mem observer sessions", () => {
+  const root = join(mkdtempSync(join(tmpdir(), "context-find-mem-")), "projects");
+  mkdirSync(join(root, "-w-proj"), { recursive: true });
+  mkdirSync(join(root, "-Users-x--claude-mem-observer-sessions"), { recursive: true });
+  const turn = JSON.stringify({ type: "user", cwd: "/w/proj", gitBranch: "main",
+    message: { content: "shared marker phrase" } });
+  writeFileSync(join(root, "-w-proj", "a.jsonl"), turn, "utf8");
+  writeFileSync(join(root, "-Users-x--claude-mem-observer-sessions", "b.jsonl"), turn, "utf8");
+
+  const results = searchLocalTranscripts("shared marker phrase", root);
+  assert.equal(results.length, 1);
+  assert.ok(results[0]!.path.includes("-w-proj"));
+});
+
 test("header skips injected preambles", () => {
   const root = fixtureRoot();
   assert.deepEqual(header(join(root, "a.jsonl"))?.slice(0, 3),
@@ -300,11 +314,14 @@ test("CLI help describes application diagnostics", () => {
 });
 
 test("python agent decodes transported arguments", () => {
-  const path = join(fixtureRoot(), "a.jsonl");
+  const root = fixtureRoot();
+  const path = join(root, "a.jsonl");
   const args = ["--render", path, "60", "0", "0"];
   const encoded = Buffer.from(JSON.stringify(args)).toString("base64url");
   const done = spawnSync("python3", ["-", "--args-base64", encoded], {
     input: readFileSync(AGENT_SOURCE, "utf8"), encoding: "utf8",
+    // --render guards containment; the fixture lives under <configDir>/projects.
+    env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, "..", "..") },
   });
   assert.equal(done.status, 0, done.stderr);
   assert.ok(JSON.parse(done.stdout).some((line: string[]) => line[1].includes("fix the EBS scan")));

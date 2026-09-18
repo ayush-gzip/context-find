@@ -41,8 +41,12 @@ function fixture(): string {
 }
 
 function pythonRender(path: string, width: number, showAll: boolean, ascii: boolean) {
-  const out = execFileSync("python3", [
-    AGENT, "--render", path, String(width), showAll ? "1" : "0", ascii ? "1" : "0",
+  // Call the pure renderer directly. The --render CLI now guards path
+  // containment (see security_and_fixes), which these tmp fixtures would trip.
+  const out = execFileSync("python3", ["-c",
+    `import json,sys; sys.path.insert(0, ${JSON.stringify(dirname(AGENT))}); import store; ` +
+    `print(json.dumps(store.render_transcript(${JSON.stringify(path)}, ${width}, ` +
+    `${showAll ? "True" : "False"}, ${ascii ? "True" : "False"})))`,
   ], { encoding: "utf8" });
   return JSON.parse(out) as [string, string][];
 }

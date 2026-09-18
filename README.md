@@ -10,7 +10,7 @@ Search every Claude Code and Codex conversation you have ever had, across every
 working directory and every machine, then jump back into one.
 
 ```
-context-find "fargate arm64"
+context-find "rate limit retry"
 ```
 
 ---
@@ -49,18 +49,29 @@ inside the one you meant.
 
 ## Install
 
-Built on Ink, in TypeScript. Not published yet, so install from a clone.
-Installs `context-find` and the short alias `cfind`. Needs Node 18 or newer.
+Built on Ink, in TypeScript. Needs git, Node 18 or newer, and npm. One command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ayush-gzip/context-find/main/install.sh | bash
+```
+
+Or clone and run the installer yourself:
 
 ```sh
 git clone https://github.com/ayush-gzip/context-find
-cd context-find/ts
-npm install && npm run build && npm install -g .
+./context-find/install.sh
 ```
 
-Windows, macOS and Linux all work. On Windows use Windows Terminal or any
-VT-capable console; a legacy `cmd.exe` falls back to ASCII box drawing
-automatically.
+The installer clones (or updates) the repo under
+`~/.local/share/context-find`, builds it, symlinks `context-find` and the short
+alias `cfind` into `~/.local/bin`, and adds that directory to your `PATH` in
+`~/.bashrc` and `~/.zshrc`. Re-run it any time to pull and rebuild the latest.
+Open a new shell afterwards.
+
+Windows, macOS and Linux all work at runtime; the installer covers macOS and
+Linux. On Windows, clone the repo and run `npm install && npm run build` in
+`ts`, then use Windows Terminal or any VT-capable console (a legacy `cmd.exe`
+falls back to ASCII box drawing automatically).
 
 ---
 
@@ -68,8 +79,8 @@ automatically.
 
 ```sh
 context-find                       # browse everything, newest first
-context-find "ebs snapshot"        # conversations whose transcript contains that text
-context-find --codex "kite"        # Codex only
+context-find "rate limiter"        # conversations whose transcript contains that text
+context-find --codex "docker build" # Codex only
 context-find --list-machines       # what is reachable, and what it holds
 ```
 
@@ -106,13 +117,13 @@ With no `--claude` or `--codex`, both are searched.
 first prompt, and a copy-pasteable command that resumes it:
 
 ```
-2026-08-11 09:43  codex   ~/Documents/Work/EffDog  [-]
-  kite login
-  cd /Users/ayush/Documents/Work/EffDog && codex resume 019fef02-9ecc-7bb0-8f8c-c3af852b6cd6
+2026-08-11 09:43  codex   ~/projects/api-gateway  [-]
+  add retry with exponential backoff
+  cd /home/you/projects/api-gateway && codex resume 019fef02-9ecc-7bb0-8f8c-c3af852b6cd6
 ```
 
 The browser is skipped automatically when output is not a terminal, so
-`context-find ebs | less` and cron jobs behave.
+`context-find auth | less` and cron jobs behave.
 
 ### `--list-machines`
 
@@ -123,7 +134,7 @@ The browser is skipped automatically when output is not a terminal, so
   │ MACHINE            │ CLAUDE │ CODEX │ TOTAL │ LAST USED    │ STATUS        │
   ├────────────────────┼────────┼───────┼───────┼──────────────┼───────────────┤
   │ this machine       │    189 │   136 │   325 │ 1 second ago │ ready         │
-  │ ayush@192.168.1.10 │    315 │     3 │   318 │ 4 weeks ago  │ ready in 0.3s │
+  │ you@192.0.2.10     │    315 │     3 │   318 │ 4 weeks ago  │ ready in 0.3s │
   │ build-box          │      - │     - │     - │ -            │ unreachable   │
   ╰────────────────────┴────────┴───────┴───────┴──────────────┴───────────────╯
 
@@ -215,7 +226,7 @@ Put one ssh target per line in `~/.context-find/hosts`:
 ```
 # ~/.context-find/hosts
 mini
-ayush@192.168.1.10 -i ~/.ssh/id_ed25519_macmini # context-find:os=posix
+you@192.0.2.10 -i ~/.ssh/id_ed25519 # context-find:os=posix
 build-box -p 2222 # context-find:os=windows
 prod-jump -J bastion.example.com
 ```
@@ -237,8 +248,8 @@ rows are tagged with the host, and `r` resumes them over `ssh -t`.
 For a one-off machine, or to ignore the file entirely:
 
 ```sh
-context-find --host "mini -i ~/.ssh/other_key" "kite login"
-context-find --local "kite login"
+context-find --host "mini -i ~/.ssh/other_key" "auth bug"
+context-find --local "auth bug"
 ```
 
 ### Nothing to install on the far side
@@ -392,6 +403,9 @@ Run `npm run build` to compile the TypeScript sources and copy `store.py` into
 `dist/` (which `npm test` also runs to ensure the packaged agent bundle is
 available for remote agent tests). The golden suite shells out to `python3` to
 diff the local render against the remote agent.
+
+The test runner uses the installed TypeScript compiler to load source tests,
+including on Node 20. It does not require native TypeScript support in Node.
 
 ```
 context-find/
