@@ -1,0 +1,28 @@
+name: Repoint cleaned release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/repoint-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove helper and move release tag
+        run: |
+          git config user.name ayush-gzip
+          git config user.email 172014165+ayush-gzip@users.noreply.github.com
+          git rm .github/workflows/repoint-release.yml
+          git commit -m "chore: finish contributor history cleanup"
+          git push origin HEAD:main
+          git tag -f v0.1.0 HEAD
+          git push --force origin refs/tags/v0.1.0
