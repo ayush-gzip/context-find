@@ -80,10 +80,10 @@ test("scan agrees with store.py on which files match", () => {
   for (const query of ["describe-volumes", "EBS", "no-such-text", ""]) {
     const out = execFileSync("python3", ["-c",
       `import json,sys; sys.path.insert(0, ${JSON.stringify(join(REPO, "src", "context_find"))});` +
-      `import store; print(json.dumps([s.path for s in store.search_local_transcripts(` +
+      `import store; print(json.dumps([[s.path, s.summary] for s in store.search_local_transcripts(` +
       `${JSON.stringify(query)}, root=${JSON.stringify(root)})]))`,
     ], { encoding: "utf8" });
-    assert.deepEqual(searchLocalTranscripts(query, root).map((s) => s.path), JSON.parse(out),
+    assert.deepEqual(searchLocalTranscripts(query, root).map((s) => [s.path, s.summary]), JSON.parse(out),
       `scan drift for query ${JSON.stringify(query)}`);
   }
 });
