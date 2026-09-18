@@ -426,6 +426,3 @@ terminal or a second machine, lives outside this repo.
 
 ---
 
-## License
-
-MIT
