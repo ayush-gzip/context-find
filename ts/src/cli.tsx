@@ -31,12 +31,14 @@ import {
 import { machineRow } from "./rows.ts";
 import {
   relativeTime,
+  claudeConfigDir,
   conversationCounts,
   projectsRoots,
   prettyPath,
   renderTranscript,
   sanitizeTerminalText,
   sessionId,
+  setExtraConfigDirs,
   SOURCES,
   type Line,
   type Session,
@@ -58,6 +60,7 @@ context-find - search and resume Claude Code conversations
 
   --host SSH       also search this ssh host (repeatable); for show, the host holding <path>
   --local          ignore the hosts configured in ~/.context-find/hosts
+  --extra-dir DIR  also search this Claude config dir, e.g. ~/.claude-personal (repeatable)
   --onboard-external  add a machine to ~/.context-find/hosts, interactively
   --debug          print application diagnostics to stderr
   --json           print search results as JSON (for scripts and agents)
@@ -81,6 +84,25 @@ function agentResumeArgv(source: Source): string[] {
   return argv;
 }
 
+/** Claude only resumes a session found in its own config dir, so point it at the
+ *  store the transcript came from. The default store must run with CLAUDE_CONFIG_DIR
+ *  unset: pointing it at ~/.claude moves where claude reads .claude.json from. */
+function claudeEnvPrefix(session: Session): string {
+  if (session.source !== "claude") return "";
+  const dir = claudeConfigDir(session.path);
+  if (dir) return `CLAUDE_CONFIG_DIR=${quoteForPosixShell(dir)} `;
+  return process.env["CLAUDE_CONFIG_DIR"] ? "env -u CLAUDE_CONFIG_DIR " : "";
+}
+
+function resumeEnv(session: Session): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (session.source !== "claude") return env;
+  const dir = claudeConfigDir(session.path);
+  if (dir) env["CLAUDE_CONFIG_DIR"] = dir;
+  else delete env["CLAUDE_CONFIG_DIR"];
+  return env;
+}
+
 function resumeSession(session: Session): number {
   const id = sessionId(session);
   const argv = agentResumeArgv(session.source);
@@ -95,6 +117,7 @@ function resumeSession(session: Session): number {
   }
   const done = spawnSync(argv[0]!, [...argv.slice(1), id], {
     cwd: session.cwd,
+    env: resumeEnv(session),
     stdio: "inherit",
   });
   if (done.error) {
@@ -103,7 +126,7 @@ function resumeSession(session: Session): number {
     );
     printTerminalText(
       `${argv[0]} not found on PATH. Run this yourself:\n` +
-        `  cd ${quoteForPosixShell(session.cwd)} && ${argv.join(" ")} ${quoteForPosixShell(id)}`,
+        `  cd ${quoteForPosixShell(session.cwd)} && ${claudeEnvPrefix(session)}${argv.join(" ")} ${quoteForPosixShell(id)}`,
     );
     return 127;
   }
@@ -219,7 +242,7 @@ function printSessionList(
       );
     } else {
       printTerminalText(
-        `  cd ${quoteForPosixShell(session.cwd)} && ${argv.join(" ")} ${quoteForPosixShell(id)}\n`,
+        `  cd ${quoteForPosixShell(session.cwd)} && ${claudeEnvPrefix(session)}${argv.join(" ")} ${quoteForPosixShell(id)}\n`,
       );
     }
   }
@@ -396,6 +419,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     options: {
       host: { type: "string", multiple: true, default: [] },
       local: { type: "boolean", default: false },
+      "extra-dir": { type: "string", multiple: true, default: [] },
       "onboard-external": { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
@@ -428,6 +452,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     printTerminalText(USAGE);
     return 0;
   }
+
+  for (const dir of values["extra-dir"]) {
+    if (!existsSync(join(dir, "projects")))
+      printTerminalError(`! --extra-dir ${dir}: no projects folder, skipped`);
+  }
+  setExtraConfigDirs(values["extra-dir"]);
 
   if (values["onboard-external"]) {
     debug("selected mode: onboarding");

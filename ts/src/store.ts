@@ -7,7 +7,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, basename, sep } from "node:path";
+import { join, basename, dirname, resolve, sep } from "node:path";
 import { debug } from "./debug.ts";
 
 /** Preambles Claude Code injects into a user turn. Never what the human typed. */
@@ -64,16 +64,31 @@ export function codexRoots(): string[] {
   return isDir(root) ? [root] : [];
 }
 
-/** Every transcript store on this machine, CLAUDE_CONFIG_DIR first. */
+let extraConfigDirs: string[] = [];
+
+/** Claude config dirs from --extra-dir, searched as if each were a CLAUDE_CONFIG_DIR. */
+export function setExtraConfigDirs(dirs: string[]): void {
+  extraConfigDirs = dirs.map((dir) => resolve(dir));
+}
+
+/** Every transcript store on this machine: CLAUDE_CONFIG_DIR, then --extra-dir, then ~/.claude. */
 export function projectsRoots(): string[] {
   const roots: string[] = [];
   const base = process.env["CLAUDE_CONFIG_DIR"];
-  const candidates = base ? [base, join(homedir(), ".claude")] : [join(homedir(), ".claude")];
+  const candidates = [...(base ? [base] : []), ...extraConfigDirs, join(homedir(), ".claude")];
   for (const candidate of candidates) {
     const root = join(candidate, "projects");
     if (!roots.includes(root) && isDir(root)) roots.push(root);
   }
   return roots;
+}
+
+/** The config dir whose store holds this transcript, or null for the default ~/.claude.
+ *  Resume sets CLAUDE_CONFIG_DIR from it: claude only finds a session in its own store. */
+export function claudeConfigDir(path: string): string | null {
+  const root = projectsRoots().find((candidate) => path.startsWith(candidate + sep));
+  const dir = root ? dirname(root) : null;
+  return dir && dir !== join(homedir(), ".claude") ? dir : null;
 }
 
 function isDir(path: string): boolean {

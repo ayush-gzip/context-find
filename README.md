@@ -78,6 +78,7 @@ context-find [query] [options]
 | `--codex` | only Codex conversations |
 | `--host SSH` | also search this ssh host. Repeatable. |
 | `--local` | ignore the hosts in `~/.context-find/hosts` |
+| `--extra-dir DIR` | also search this Claude config dir, for example `~/.claude-personal`. Repeatable. Resume runs Claude with `CLAUDE_CONFIG_DIR` set to the dir that holds the session. |
 | `--onboard-external` | add an SSH machine interactively |
 | `--debug` | print application diagnostics to stderr |
 | `--list` | print results as plain text instead of opening the browser |

@@ -105,6 +105,6 @@ npm run typecheck  # tsc --noEmit
 
 - **Web interface:** Binds strictly to `127.0.0.1`. Every request validates the `Host` header against the exact permitted host and port before serving content (preventing DNS rebinding and token disclosure). API calls require a per-run random hex token.
 - **Host resolution:** Remote requests resolve against the stored host configuration; HTTP-supplied connection options are never passed to SSH.
-- **Path containment:** File paths in `/api/session` are resolved to canonical real paths and validated for containment inside configured transcript directories (`~/.claude/projects`, `~/.codex/sessions`), preventing symlink or prefix escapes.
+- **Path containment:** File paths in `/api/session` are resolved to canonical real paths and validated for containment inside configured transcript directories (`~/.claude/projects`, `CLAUDE_CONFIG_DIR` and `--extra-dir` stores, `~/.codex/sessions`), preventing symlink or prefix escapes.
 - **Terminal sanitization:** Untrusted transcript text is sanitized to strip OSC sequences (e.g. OSC 52 clipboard injection), CSI escape sequences, and terminal control characters.
 - **Shell quoting:** Resume commands use `quoteForPosixShell` to safely escape directory paths, session IDs, and command arguments.
