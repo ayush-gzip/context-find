@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Monitor } from "../src/monitor.ts";
 import { applyCodexEvent, newAgent } from "../src/agents.ts";
 
-// The iPhone app (ios/cfind/Models.swift) decodes these fields without a
+// The iPhone app (cfind-apple, cfind/Models.swift) decodes these fields without a
 // default. If one goes missing, the whole event fails to decode on the phone.
 const need = (o: any, fields: Record<string, string>, where: string) => {
   for (const [key, type] of Object.entries(fields))
