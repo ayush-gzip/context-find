@@ -82,7 +82,7 @@
       </main>
       <footer class="statusbar">
         <span
-          ><i class="online-dot"></i> LOCAL ONLY
+          ><i class="online-dot"></i> Local only
           <span class="status-separator">/</span>
           <span id="footer-sources">Discovering sources</span></span
         ><span id="footer-update">Waiting for collector</span>
@@ -97,7 +97,7 @@
     <dialog id="new-dialog">
       <form id="new-form">
         <div class="dialog-top">
-          <span class="eyebrow">START SOMETHING</span
+          <span class="eyebrow">New agent</span
           ><button
             class="icon-button"
             type="button"
@@ -163,6 +163,41 @@
     </dialog>
     <dialog id="image-dialog" class="image-viewer" aria-label="Image">
       <img alt="Attached image" />
+    </dialog>
+    <dialog id="palette" class="palette" aria-label="Command menu">
+      <input
+        id="palette-q"
+        placeholder="Type a command or search…"
+        aria-label="Command or search"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <div id="palette-list" role="listbox"></div>
+    </dialog>
+    <dialog id="keys-dialog" class="keys" aria-label="Keyboard shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <dl>
+        <dt><kbd>⌘K</kbd></dt>
+        <dd>Command menu</dd>
+        <dt><kbd>C</kbd></dt>
+        <dd>New agent</dd>
+        <dt><kbd>G</kbd> <kbd>O</kbd></dt>
+        <dd>Overview</dd>
+        <dt><kbd>G</kbd> <kbd>A</kbd></dt>
+        <dd>Agents</dd>
+        <dt><kbd>G</kbd> <kbd>S</kbd></dt>
+        <dd>Sessions</dd>
+        <dt><kbd>G</kbd> <kbd>U</kbd></dt>
+        <dd>Usage</dd>
+        <dt><kbd>G</kbd> <kbd>M</kbd></dt>
+        <dd>Machines</dd>
+        <dt><kbd>/</kbd></dt>
+        <dd>Search sessions</dd>
+        <dt><kbd>⌘B</kbd></dt>
+        <dd>Hide or show the sidebar</dd>
+        <dt><kbd>Esc</kbd></dt>
+        <dd>Close</dd>
+      </dl>
     </dialog>
     <div id="toast" class="toast" role="status" hidden></div>
     <script>

@@ -1586,11 +1586,34 @@ document.addEventListener("submit", async (e) => {
     }
   }
 });
+// Single keys, as in Linear: only when not typing and no dialog is open.
+const goKeys = {
+  o: "overview",
+  a: "workspace",
+  s: "sessions",
+  u: "usage",
+  m: "machines",
+};
+function shortcut(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return false;
+  if (e.target.closest?.("input,textarea,select,[contenteditable]"))
+    return false;
+  if ($("dialog[open]")) return false;
+  if (shortcut.g && Date.now() - shortcut.g < 1000 && goKeys[e.key]) {
+    shortcut.g = 0;
+    navigate(goKeys[e.key]);
+  } else if (e.key === "g") shortcut.g = Date.now();
+  else if (e.key === "c") openNew();
+  else if (e.key === "?") $("#keys-dialog").showModal();
+  else return false;
+  return true;
+}
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
-    openNew();
+    openPalette();
   }
+  if (shortcut(e)) e.preventDefault();
   if ((e.metaKey || e.ctrlKey) && e.key === "b") {
     e.preventDefault();
     setSidebar(!document.documentElement.classList.contains("sidebar-hidden"));
@@ -1673,7 +1696,10 @@ function setTheme(theme) {
       : '<path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/>',
   );
 }
-setTheme(localStorage.getItem("cfind-theme") || "light");
+setTheme(
+  localStorage.getItem("cfind-theme") ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+);
 function setSidebar(hidden) {
   document.documentElement.classList.toggle("sidebar-hidden", hidden);
   localStorage.setItem("cfind-sidebar", hidden ? "hidden" : "shown");
@@ -1692,6 +1718,105 @@ $("#theme-toggle").onclick = () =>
   setTheme(
     document.documentElement.dataset.theme === "light" ? "dark" : "light",
   );
+// ⌘K: commands first; with text, matching agents and sessions too.
+function paletteItems(q) {
+  const t = q.trim().toLowerCase(),
+    has = (...s) => s.some((x) => String(x || "").toLowerCase().includes(t)),
+    keys = { overview: "G O", workspace: "G A", sessions: "G S", usage: "G U" },
+    commands = [
+      { label: "New agent", hint: "C", run: openNew },
+      ...Object.entries(labels).map(([page, label]) => ({
+        label: "Go to " + label,
+        hint: keys[page],
+        run: () => navigate(page),
+      })),
+      {
+        label: "Switch appearance",
+        run: () => $("#theme-toggle").click(),
+      },
+      {
+        label: "Hide or show the sidebar",
+        hint: "⌘B",
+        run: () =>
+          setSidebar(
+            !document.documentElement.classList.contains("sidebar-hidden"),
+          ),
+      },
+      {
+        label: "Keyboard shortcuts",
+        hint: "?",
+        run: () => $("#keys-dialog").showModal(),
+      },
+    ].filter((c) => !t || has(c.label));
+  if (!t) return commands;
+  const agents = S.workspace.agents
+      .filter((a) => has(a.title, a.cwd))
+      .map((a) => ({
+        label: a.title || "Agent session",
+        sub: folder(a.cwd),
+        hint: "Agent",
+        run: () => openView({ kind: "agent", id: a.id }),
+      })),
+    sessions = (S.metrics?.sessions || [])
+      .filter((s) => !s.parent && has(s.title, s.cwd))
+      .slice(0, 12)
+      .map((s) => ({
+        label: s.title || "Session",
+        sub: folder(s.cwd),
+        hint: profileLabel(s.profile),
+        run: () => openSession(s),
+      }));
+  return [...commands, ...agents, ...sessions].slice(0, 30);
+}
+function openPalette() {
+  if ($("#palette").open) return;
+  $("#palette-q").value = "";
+  S.palette = 0;
+  renderPalette();
+  $("#palette").showModal();
+  $("#palette-q").focus();
+}
+function renderPalette() {
+  const items = (S.paletteItems = paletteItems($("#palette-q").value));
+  S.palette = Math.max(0, Math.min(S.palette, items.length - 1));
+  $("#palette-list").innerHTML = items.length
+    ? items
+        .map(
+          (it, i) =>
+            `<button type="button" role="option" class="palette-item${i === S.palette ? " active" : ""}" data-palette="${i}"><span>${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</span>${it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ""}</button>`,
+        )
+        .join("")
+    : '<div class="palette-empty">No results</div>';
+  $("#palette-list .active")?.scrollIntoView({ block: "nearest" });
+}
+function runPalette(i) {
+  const it = S.paletteItems?.[i];
+  if (!it) return;
+  $("#palette").close();
+  it.run();
+}
+$("#palette-q").oninput = () => {
+  S.palette = 0;
+  renderPalette();
+};
+$("#palette-q").onkeydown = (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    S.palette += e.key === "ArrowDown" ? 1 : -1;
+    renderPalette();
+  } else if (e.key === "Enter" && !e.isComposing) {
+    e.preventDefault();
+    runPalette(S.palette);
+  }
+};
+$("#palette").onclick = (e) => {
+  const b = e.target.closest("[data-palette]");
+  if (b) runPalette(+b.dataset.palette);
+  else if (e.target === e.currentTarget) e.currentTarget.close();
+};
+$("#keys-dialog").onclick = (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.close();
+};
 connect();
 navigate(S.page);
 void accounts();

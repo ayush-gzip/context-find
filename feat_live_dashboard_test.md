@@ -87,6 +87,10 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E27 | ⌘B (Ctrl+B) in Chrome and in the Mac app | sidebar hides, content takes the width (`.shell` margin 0); again shows it; choice kept in `localStorage` `cfind-sidebar`. Pass |
 | E28 | Agents board, an agent with 3 subagents | folded under "› 3 subagents"; click unfolds; stays open across board redraws (`S.openKids`). Long prompts wrap inside the card and clamp to 3 lines. Pass |
 | E29 | page with a stub `window.webkit.messageHandlers.cfind` | opening a chat posts `session:<path>`; Escape posts an empty string (the Mac app uses this to skip banners for the chat on screen). Pass |
+| E31 | Linear/Cursor style restyle (`dashboard.css`) | 13px base, 1px hairlines, 8px cards, mono for paths, models and numbers; dark and light at 1512 and 700 wide; no sideways overflow on any page. Pass |
+| E32 | chat after the restyle (user: "improve spacing and contrast") | dark muted text #84848d, secondary #ababb4, lines 8% white, agent bubble #222226; messages 8px apart, bubbles 9x13 padding at 13.5px. Pass |
+| E33 | message box alignment | one line: text box and buttons both 26px tall, same top; two lines: buttons sit on the last line (textarea 46px, attach top = textarea top + 20). Pass |
+| E34 | ⌘K command menu and single-key shortcuts | ⌘K lists commands; typing "cfind" lists matching sessions (12 items); ↓ + Return runs one; `g s` goes to Sessions; `?` opens the shortcut list; no page errors (Chrome); the same in WKWebView. Pass |
 | E30 | small glass sidebar, light, dark, and 700 px wide | floating pane 10 px from the edges, blur, 210 px wide; icons only under 760 px. Screenshots checked. Pass |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
