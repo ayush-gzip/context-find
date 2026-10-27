@@ -161,7 +161,7 @@ export function detectSource(path: string): Source {
   }
 }
 
-function codexText(payload: Record<string, any>): string {
+export function codexText(payload: Record<string, any>): string {
   return (payload["content"] ?? [])
     .filter((b: any) => b && typeof b === "object" &&
       ["input_text", "output_text", "text"].includes(b.type))
@@ -169,7 +169,7 @@ function codexText(payload: Record<string, any>): string {
     .join("\n");
 }
 
-function startsWithCodexSkipped(text: string): boolean {
+export function startsWithCodexSkipped(text: string): boolean {
   return CODEX_SKIP_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
@@ -192,7 +192,7 @@ function walk(dir: string, found: string[]): void {
   }
 }
 
-function entries(path: string): Record<string, any>[] {
+export function entries(path: string): Record<string, any>[] {
   const out: Record<string, any>[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim()) continue;
@@ -208,7 +208,7 @@ function entries(path: string): Record<string, any>[] {
   return out;
 }
 
-function plainText(content: unknown): string {
+export function plainText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
@@ -219,7 +219,7 @@ function plainText(content: unknown): string {
   return "";
 }
 
-function startsWithSkipped(text: string): boolean {
+export function startsWithSkipped(text: string): boolean {
   return SKIP_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
@@ -267,7 +267,7 @@ function codexHeader(path: string): Header | null {
   return cwd ? [cwd, "-", "(no prompt text)", sid] : null;
 }
 
-function stripReminders(text: string): string {
+export function stripReminders(text: string): string {
   return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, " ");
 }
 
@@ -356,7 +356,7 @@ export function searchLocalTranscripts(query = "", root?: string): Session[] {
   return found;
 }
 
-function toolArg(payload: unknown): string {
+export function toolArg(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
   for (const key of ARG_KEYS) {
     const value = (payload as Record<string, unknown>)[key];

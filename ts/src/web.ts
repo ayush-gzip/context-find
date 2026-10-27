@@ -1,24 +1,57 @@
-/**
- * Read-only browser view: search the same corpus, read a rendered conversation.
- *
- * Localhost only. Transcripts hold whatever you have pasted into a prompt, so
- * this must never be reachable off the machine: the socket binds 127.0.0.1, and
- * every /api call carries a per-run token so another site in your browser cannot
- * drive it. Resume is deliberately absent - a browser has no terminal to hand a
- * conversation back to; that is the CLI's job, and v2's.
- */
+/** Local agent dashboard. Bind loopback only; authenticate every API request. */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createReadStream,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { platform } from "node:os";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 
 import { debug } from "./debug.ts";
-import { remoteConversationCounts, hostDisplayName, lastPingedAt, recordPing, renderRemoteTranscript } from "./remote.ts";
-import { relativeTime, codexRoots, conversationCounts, projectsRoots, prettyPath, renderTranscript, sessionId,
-         type Line, type Session } from "./store.ts";
+import {
+  remoteConversationCounts,
+  hostDisplayName,
+  lastPingedAt,
+  recordPing,
+  renderRemoteTranscript,
+} from "./remote.ts";
+import {
+  relativeTime,
+  codexRoots,
+  conversationCounts,
+  projectsRoots,
+  prettyPath,
+  renderTranscript,
+  sessionId,
+  type Line,
+  type Session,
+} from "./store.ts";
 import { Search } from "./search.ts";
+import { join } from "node:path";
+import { Monitor, dashboardProfiles, monitorDir } from "./monitor.ts";
+import { AgentWorkspace } from "./agents.ts";
+import { readConversation } from "./conversation.ts";
+import { codexHolder, queueCodex, sendToPane, takeOver } from "./live.ts";
+import { Devices, tailscaleHost } from "./devices.ts";
+import {
+  MAX_UPLOAD,
+  saveUpload,
+  uploadIds,
+  uploadPath,
+  uploadType,
+  withPaths,
+} from "./uploads.ts";
+import { serviceState } from "./service.ts";
 
 function json(res: ServerResponse, code: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -27,9 +60,13 @@ function json(res: ServerResponse, code: number, body: unknown): void {
 }
 
 /** Best-effort open in the default browser; the URL is always printed too. */
-function openBrowser(url: string): void {
-  const cmd = platform() === "darwin" ? "open"
-    : platform() === "win32" ? "cmd" : "xdg-open";
+export function openBrowser(url: string): void {
+  const cmd =
+    platform() === "darwin"
+      ? "open"
+      : platform() === "win32"
+        ? "cmd"
+        : "xdg-open";
   const args = platform() === "win32" ? ["/c", "start", "", url] : [url];
   try {
     spawn(cmd, args, { stdio: "ignore", detached: true }).unref();
@@ -78,7 +115,10 @@ function safeRealPath(p: string): string | null {
   }
 }
 
-export function isPathContained(targetPath: string, parentDir: string): boolean {
+export function isPathContained(
+  targetPath: string,
+  parentDir: string,
+): boolean {
   const rel = relative(parentDir, targetPath);
   return !rel.startsWith("..") && !isAbsolute(rel);
 }
@@ -88,368 +128,580 @@ export function createWebServer(
   port = 0,
   token = randomBytes(16).toString("hex"),
 ) {
-  const localRoots = [...projectsRoots(), ...codexRoots()].map((r) => resolve(r));
+  const profiles = dashboardProfiles();
+  const monitor = new Monitor({ roots: profiles });
+  const workspace = new AgentWorkspace(profiles);
+  const devices = new Devices();
+  // A phone may retry a send after a dropped connection; one clientId runs once.
+  const sent = new Map<string, { at: number; value?: unknown }>();
+  const readJson = async (req: IncomingMessage, max: number) => {
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+      if (Buffer.byteLength(body) > max) throw new Error("Request too large");
+    }
+    return JSON.parse(body || "{}");
+  };
+  let monitorStarted = false;
+  const startMonitor = () => {
+    if (!monitorStarted) {
+      monitorStarted = true;
+      monitor.start();
+    }
+  };
+  const peers = new Set<ServerResponse>();
+  const broadcast = (event: string, value: unknown) => {
+    const frame = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
+    for (const peer of peers) {
+      if (peer.writableLength > 2 * 1024 * 1024) {
+        peer.end();
+        peers.delete(peer);
+      } else peer.write(frame);
+    }
+  };
+  monitor.subscribe(() => broadcast("metrics", monitor.snapshot()));
+  workspace.subscribe(() => broadcast("workspace", workspace.snapshot()));
+  const heartbeat = setInterval(() => {
+    for (const peer of peers) peer.write(": heartbeat\n\n");
+  }, 15000);
+  heartbeat.unref();
+  const localRoots = [...profiles.map((p) => p.path)].map((r) => resolve(r));
+  /** Canonical transcript path, or the refusal for a path outside the stores. */
+  const containedTranscript = (path: string): string | [number, string] => {
+    const realTarget = safeRealPath(resolve(path));
+    if (!realTarget) return [404, "path not found"];
+    const realRoots = localRoots
+      .map(safeRealPath)
+      .filter((r): r is string => r !== null);
+    return realRoots.some((r) => isPathContained(realTarget, r))
+      ? realTarget
+      : [403, "path outside transcript stores"];
+  };
 
   const asRow = (s: Session) => ({
-    path: s.path, source: s.source, cwd: s.cwd, branch: s.branch,
-    summary: s.summary, mtime: s.mtime, sid: sessionId(s),
+    path: s.path,
+    source: s.source,
+    cwd: s.cwd,
+    branch: s.branch,
+    summary: s.summary,
+    mtime: s.mtime,
+    sid: sessionId(s),
     host: s.host ? hostDisplayName(s.host) : null,
     hostLabel: s.host != null ? hostDisplayName(s.host) : null,
     pretty: prettyPath(s.cwd),
   });
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const addr = server.address();
-    const currentPort = addr && typeof addr === "object" ? addr.port : port;
-    if (!isPermittedHost(req.headers.host, currentPort)) {
-      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
-      res.end("forbidden: invalid host header");
-      return;
-    }
-
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${currentPort}`);
-
-    if (url.pathname === "/") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(PAGE.replace("__TOKEN__", token));
-      return;
-    }
-
-    if (url.pathname.startsWith("/api/")) {
-      // localhost + unguessable token: another origin cannot read the token, so
-      // it cannot reach this corpus even though the port is open on the machine.
-      if (url.searchParams.get("t") !== token) {
-        json(res, 403, { error: "forbidden" });
+  const server = createServer(
+    async (req: IncomingMessage, res: ServerResponse) => {
+      const addr = server.address();
+      const currentPort = addr && typeof addr === "object" ? addr.port : port;
+      if (
+        !isPermittedHost(req.headers.host, currentPort) &&
+        !(devices.host() && req.headers.host?.toLowerCase() === devices.host())
+      ) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+        res.end("forbidden: invalid host header");
         return;
       }
-      try {
-        if (url.pathname === "/api/search") {
-          const q = url.searchParams.get("q") ?? "";
-          const search = new Search(q, hosts);
-          await search.wait();
-          json(res, 200, {
-            sessions: search.sessions.map(asRow),
-            errors: search.errors.map(([host, message]) => ({ host, message })),
-          });
-          return;
-        }
-        if (url.pathname === "/api/machines") {
-          const row = (name: string, tally: Record<string, number> | null,
-                       status: string, error: string | null) => ({
-            name,
-            claude: tally ? tally["claude"] ?? 0 : null,
-            codex: tally ? tally["codex"] ?? 0 : null,
-            total: tally ? (tally["claude"] ?? 0) + (tally["codex"] ?? 0) : null,
-            last: tally ? relativeTime(tally["last"]) : null,
-            status, error,
-          });
-          const machines = [row("this machine", conversationCounts(), "ready", null)];
-          await Promise.all(hosts.map(async (spec) => {
-            try {
-              const tally = await remoteConversationCounts(spec);
-              recordPing(spec);
-              machines.push(row(hostDisplayName(spec), tally, `last pinged ${relativeTime(lastPingedAt(spec))}`, null));
-            } catch (error) {
-              const last = lastPingedAt(spec);
-              machines.push(row(hostDisplayName(spec), null,
-                last ? `unreachable, last ok ${relativeTime(last)}` : "unreachable",
-                (error as Error).message));
-            }
-          }));
-          json(res, 200, { machines });
-          return;
-        }
-        if (url.pathname === "/api/session") {
-          const path = url.searchParams.get("path") ?? "";
-          const requestedHost = url.searchParams.get("host") || undefined;
-          const showAll = url.searchParams.get("all") === "1";
-          let resolvedHost: string | undefined;
-          let targetPath = path;
 
-          if (requestedHost) {
-            resolvedHost = resolveConfiguredHost(requestedHost, hosts);
-            if (!resolvedHost) {
-              json(res, 403, { error: "unknown host" });
-              return;
-            }
-          } else {
-            const realTarget = safeRealPath(resolve(path));
-            if (!realTarget) {
-              json(res, 404, { error: "path not found" });
-              return;
-            }
-            const realRoots = localRoots
-              .map(safeRealPath)
-              .filter((r): r is string => r !== null);
-            const inside = realRoots.some((r) => isPathContained(realTarget, r));
-            if (!inside) {
-              json(res, 403, { error: "path outside transcript stores" });
-              return;
-            }
-            targetPath = realTarget;
+      const url = new URL(req.url ?? "/", `http://127.0.0.1:${currentPort}`);
+
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.setHeader("referrer-policy", "no-referrer");
+      if (
+        url.pathname === "/dashboard.css" ||
+        url.pathname === "/dashboard.js" ||
+        url.pathname === "/markdown.js"
+      ) {
+        res.writeHead(200, {
+          "content-type": url.pathname.endsWith(".css")
+            ? "text/css"
+            : "text/javascript",
+        });
+        res.end(
+          readFileSync(
+            new URL("./dashboard/" + url.pathname.slice(1), import.meta.url),
+          ),
+        );
+        return;
+      }
+      if (url.pathname === "/") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(
+          readFileSync(
+            new URL("./dashboard/index.html", import.meta.url),
+            "utf8",
+          ).replace("__TOKEN__", token),
+        );
+        return;
+      }
+
+      const bearer = /^Bearer ([0-9a-f]{64})$/.exec(
+          req.headers.authorization ?? "",
+        )?.[1],
+        device = bearer ? devices.check(bearer) : undefined;
+      if (url.pathname === "/api/pair") {
+        try {
+          if (req.method !== "POST") throw new Error("POST required");
+          const data = await readJson(req, 4096);
+          if (data.action === "unpair") {
+            if (!device) throw new Error("Not paired");
+            devices.revoke(device.id);
+            json(res, 200, { ok: true });
+          } else if (devices.limited())
+            json(res, 429, { error: "Too many tries. Wait a minute" });
+          else json(res, 200, devices.pair(data.code, data.name));
+        } catch (error) {
+          json(res, 403, { error: (error as Error).message });
+        }
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/")) {
+        // localhost + unguessable token: another origin cannot read the token, so
+        // it cannot reach this corpus even though the port is open on the machine.
+        // A paired phone sends its own token instead.
+        const mac = url.searchParams.get("t") === token;
+        if (!mac && !device) {
+          json(res, 403, { error: "forbidden" });
+          return;
+        }
+        // Pairing and sign-in stay on the Mac.
+        if (
+          !mac &&
+          (url.pathname === "/api/devices" || url.pathname === "/api/login")
+        ) {
+          json(res, 403, { error: "Only from the Mac" });
+          return;
+        }
+        const origin = req.headers.origin;
+        if (
+          origin &&
+          origin !== `http://127.0.0.1:${currentPort}` &&
+          origin !== `http://localhost:${currentPort}`
+        ) {
+          json(res, 403, { error: "forbidden origin" });
+          return;
+        }
+        let clientId = "";
+        try {
+          if (url.pathname === "/api/devices") {
+            if (req.method === "POST") {
+              const data = await readJson(req, 4096);
+              if (data.action === "pair-start") {
+                const host = tailscaleHost();
+                if (host) devices.setHost(host);
+                json(res, 200, {
+                  ...devices.startPairing(),
+                  url: host ? `https://${host}` : null,
+                });
+              } else if (data.action === "revoke") {
+                devices.revoke(data.id);
+                json(res, 200, { ok: true });
+              } else throw new Error("Unknown devices action");
+            } else
+              json(res, 200, { devices: devices.list(), host: devices.host() });
+            return;
           }
+          if (url.pathname === "/api/events") {
+            startMonitor();
+            res.writeHead(200, {
+              "content-type": "text/event-stream",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+            res.write(
+              `event: metrics\ndata: ${JSON.stringify(monitor.snapshot())}\n\n`,
+            );
+            res.write(
+              `event: workspace\ndata: ${JSON.stringify(workspace.snapshot())}\n\n`,
+            );
+            peers.add(res);
+            req.on("close", () => peers.delete(res));
+            return;
+          }
+          if (url.pathname === "/api/metrics") {
+            startMonitor();
+            await monitor.refresh();
+            json(res, 200, monitor.snapshot());
+            return;
+          }
+          if (url.pathname === "/api/workspace") {
+            json(res, 200, workspace.snapshot());
+            return;
+          }
+          if (url.pathname === "/api/accounts") {
+            json(res, 200, { accounts: await workspace.accounts() });
+            return;
+          }
+          if (url.pathname === "/api/upload") {
+            if (req.method === "POST") {
+              if (!(req.headers["content-type"] ?? "").startsWith("image/")) {
+                json(res, 415, { error: "Image required" });
+                return;
+              }
+              const parts: Buffer[] = [];
+              let size = 0;
+              for await (const chunk of req) {
+                size += (chunk as Buffer).length;
+                if (size > MAX_UPLOAD) {
+                  json(res, 413, { error: "Images must be 10 MB or smaller" });
+                  return;
+                }
+                parts.push(chunk as Buffer);
+              }
+              const id = saveUpload(Buffer.concat(parts));
+              if (id) json(res, 200, { id });
+              else
+                json(res, 415, {
+                  error: "Only PNG, JPEG, GIF and WebP images are supported",
+                });
+              return;
+            }
+            let path: string;
+            try {
+              path = uploadPath(url.searchParams.get("id"));
+            } catch (e) {
+              const bad = (e as Error).message === "Bad image id";
+              json(res, bad ? 400 : 404, { error: (e as Error).message });
+              return;
+            }
+            res.writeHead(200, {
+              "content-type": uploadType(basename(path)),
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, max-age=86400",
+            });
+            createReadStream(path).pipe(res);
+            return;
+          }
+          if (url.pathname === "/api/agent" || url.pathname === "/api/login") {
+            if (
+              req.method !== "POST" ||
+              !(req.headers["content-type"] ?? "").startsWith(
+                "application/json",
+              )
+            ) {
+              json(res, 405, { error: "POST JSON required" });
+              return;
+            }
+            let body = "";
+            for await (const chunk of req) {
+              body += chunk;
+              if (Buffer.byteLength(body) > 128 * 1024) {
+                json(res, 413, { error: "Request too large" });
+                return;
+              }
+            }
+            const data = JSON.parse(body);
+            if (url.pathname === "/api/login") {
+              if (typeof data.profile !== "string")
+                throw new Error("Profile required");
+              if (data.action === "input") {
+                workspace.loginInput(data.profile, String(data.input ?? ""));
+                json(res, 200, { ok: true });
+              } else json(res, 200, await workspace.login(data.profile));
+              return;
+            }
+            clientId =
+              typeof data.clientId === "string"
+                ? data.clientId.slice(0, 100)
+                : "";
+            if (clientId) {
+              const prior = sent.get(clientId);
+              if (prior) {
+                if (prior.value === undefined)
+                  json(res, 409, { error: "Still sending" });
+                else json(res, 200, prior.value);
+                return;
+              }
+              for (const [k, v] of sent)
+                if (Date.now() - v.at > 10 * 60 * 1000) sent.delete(k);
+              sent.set(clientId, { at: Date.now() });
+            }
+            const ok = (value: unknown) => {
+              if (clientId) sent.set(clientId, { at: Date.now(), value });
+              json(res, 200, value);
+            };
+            const images = uploadIds(data.images);
+            const said = (v: unknown) =>
+              typeof v === "string" && (!!v.trim() || images.length > 0);
+            if (data.action === "create") {
+              if (!said(data.prompt) || typeof data.cwd !== "string")
+                throw new Error("Project folder and prompt required");
+              // An external live process cannot be safely attached by resuming it a second time.
+              const session = data.sid
+                ? monitor
+                    .snapshot()
+                    .sessions.find(
+                      (s) => s.id === data.sid && s.profile === data.profile,
+                    )
+                : undefined;
+              // Codex: whoever has the session file open owns it, whatever the state says.
+              const holder =
+                data.sid && session?.source === "codex"
+                  ? codexHolder(session.path)
+                  : undefined;
+              if (holder === "helper") {
+                queueCodex(session!.id, withPaths(data.prompt, images));
+                ok({
+                  queued: true,
+                  busy: ["running", "waiting"].includes(session!.state),
+                });
+                return;
+              }
+              if (holder === "other")
+                throw new Error(
+                  "Open in a Codex window that does not use the background helper. Reply there.",
+                );
+              if (
+                data.sid &&
+                !holder &&
+                (!session ||
+                  session.open ||
+                  ["running", "waiting", "stale"].includes(session.state))
+              )
+                throw new Error("Resume requires an inactive local session");
+              ok(
+                await workspace.create(
+                  data.profile,
+                  data.cwd,
+                  data.prompt,
+                  data.sid,
+                  session?.path,
+                  images,
+                ),
+              );
+              return;
+            }
+            if (data.action === "live-send" || data.action === "takeover") {
+              const live = monitor.live(String(data.profile), String(data.sid));
+              if (!live)
+                throw new Error("This session is not open in a terminal");
+              if (data.action === "takeover") await takeOver(live);
+              else if (!said(data.prompt)) throw new Error("Prompt required");
+              else
+                await sendToPane(live, withPaths(data.prompt, images), () =>
+                  monitor.live(String(data.profile), String(data.sid)),
+                );
+              ok({ ok: true });
+              return;
+            }
+            if (typeof data.id !== "string")
+              throw new Error("Agent id required");
+            if (data.action === "send") {
+              if (!said(data.prompt)) throw new Error("Prompt required");
+              ok(await workspace.send(data.id, data.prompt, images));
+              return;
+            }
+            if (data.action === "cancel") {
+              await workspace.cancel(data.id);
+              ok({ ok: true });
+              return;
+            }
+            if (data.action === "unqueue") {
+              ok(workspace.unqueue(data.id, Number(data.index)));
+              return;
+            }
+            if (data.action === "dismiss") {
+              workspace.dismiss(data.id);
+              ok({ ok: true });
+              return;
+            }
+            if (data.action === "respond") {
+              await workspace.respond(data.id, data.answer ?? {});
+              ok({ ok: true });
+              return;
+            }
+            throw new Error("Unknown agent action");
+          }
+          if (url.pathname === "/api/search") {
+            const q = url.searchParams.get("q") ?? "";
+            const search = new Search(q, hosts);
+            await search.wait();
+            json(res, 200, {
+              sessions: search.sessions.map(asRow),
+              errors: search.errors.map(([host, message]) => ({
+                host,
+                message,
+              })),
+            });
+            return;
+          }
+          if (url.pathname === "/api/machines") {
+            const row = (
+              name: string,
+              tally: Record<string, number> | null,
+              status: string,
+              error: string | null,
+            ) => ({
+              name,
+              claude: tally ? (tally["claude"] ?? 0) : null,
+              codex: tally ? (tally["codex"] ?? 0) : null,
+              total: tally
+                ? (tally["claude"] ?? 0) + (tally["codex"] ?? 0)
+                : null,
+              last: tally ? relativeTime(tally["last"]) : null,
+              status,
+              error,
+            });
+            const machines = [
+              row("this machine", conversationCounts(), "ready", null),
+            ];
+            await Promise.all(
+              hosts.map(async (spec) => {
+                try {
+                  const tally = await remoteConversationCounts(spec);
+                  recordPing(spec);
+                  machines.push(
+                    row(
+                      hostDisplayName(spec),
+                      tally,
+                      `last pinged ${relativeTime(lastPingedAt(spec))}`,
+                      null,
+                    ),
+                  );
+                } catch (error) {
+                  const last = lastPingedAt(spec);
+                  machines.push(
+                    row(
+                      hostDisplayName(spec),
+                      null,
+                      last
+                        ? `unreachable, last ok ${relativeTime(last)}`
+                        : "unreachable",
+                      (error as Error).message,
+                    ),
+                  );
+                }
+              }),
+            );
+            json(res, 200, { machines });
+            return;
+          }
+          if (url.pathname === "/api/conversation") {
+            const target = containedTranscript(
+              url.searchParams.get("path") ?? "",
+            );
+            if (Array.isArray(target)) {
+              json(res, target[0], { error: target[1] });
+              return;
+            }
+            json(res, 200, readConversation(target));
+            return;
+          }
+          if (url.pathname === "/api/session") {
+            const path = url.searchParams.get("path") ?? "";
+            const requestedHost = url.searchParams.get("host") || undefined;
+            const showAll = url.searchParams.get("all") === "1";
+            let resolvedHost: string | undefined;
+            let targetPath = path;
 
-          const lines: Line[] = resolvedHost
-            ? await renderRemoteTranscript(resolvedHost, targetPath, 100, showAll, false)
-            : renderTranscript(targetPath, 100, showAll, false);
-          json(res, 200, { lines });
+            if (requestedHost) {
+              resolvedHost = resolveConfiguredHost(requestedHost, hosts);
+              if (!resolvedHost) {
+                json(res, 403, { error: "unknown host" });
+                return;
+              }
+            } else {
+              const target = containedTranscript(path);
+              if (Array.isArray(target)) {
+                json(res, target[0], { error: target[1] });
+                return;
+              }
+              targetPath = target;
+            }
+
+            const lines: Line[] = resolvedHost
+              ? await renderRemoteTranscript(
+                  resolvedHost,
+                  targetPath,
+                  100,
+                  showAll,
+                  false,
+                )
+              : renderTranscript(targetPath, 100, showAll, false);
+            json(res, 200, { lines });
+            return;
+          }
+        } catch (error) {
+          if (clientId && sent.get(clientId)?.value === undefined)
+            sent.delete(clientId);
+          json(res, 500, { error: (error as Error).message });
           return;
         }
-      } catch (error) {
-        json(res, 500, { error: (error as Error).message });
-        return;
       }
-    }
 
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("not found");
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    },
+  );
+
+  server.on("close", () => {
+    clearInterval(heartbeat);
+    monitor.stop();
+    workspace.close();
   });
-
-  return { server, token };
+  return { server, token, monitor, workspace };
 }
 
-export function serveWeb(hosts: string[], port: number): Promise<number> {
-  const { server, token } = createWebServer(hosts, port);
+/** The daemon keeps one URL token, so open tabs survive a restart. */
+function daemonToken() {
+  const file = join(monitorDir(), "token");
+  try {
+    const saved = readFileSync(file, "utf8").trim();
+    if (/^[0-9a-f]{32}$/.test(saved)) return saved;
+  } catch {}
+  mkdirSync(monitorDir(), { recursive: true, mode: 0o700 });
+  const token = randomBytes(16).toString("hex");
+  writeFileSync(file, token, { mode: 0o600 });
+  return token;
+}
+
+export function serveWeb(
+  hosts: string[],
+  port: number,
+  background = false,
+): Promise<number> {
+  const existing = serviceState();
+  if (!background && existing) {
+    openBrowser(`http://127.0.0.1:${existing.port}/?t=${existing.token}`);
+    console.log(`Dashboard: http://127.0.0.1:${existing.port}/`);
+    return Promise.resolve(0);
+  }
+  const { server, token, monitor, workspace } = createWebServer(
+    hosts,
+    port,
+    background ? daemonToken() : undefined,
+  );
   return new Promise((_resolve, reject) => {
     server.on("error", reject);
     server.listen(port, "127.0.0.1", () => {
       const url = `http://127.0.0.1:${port}/`;
       debug(`web server listening on ${url}`);
-      console.log(`context-find web: ${url}\nread-only; Ctrl-C to stop`);
-      openBrowser(url + `?t=${token}`);
+      console.log(`context-find dashboard: ${url}\nCtrl-C to stop`);
+      if (background) {
+        mkdirSync(monitorDir(), { recursive: true, mode: 0o700 });
+        writeFileSync(
+          join(monitorDir(), "service.json"),
+          JSON.stringify({ pid: process.pid, port, token }),
+          { mode: 0o600 },
+        );
+        monitor.start();
+      } else openBrowser(url + `?t=${token}`);
+      const stop = () => {
+        if (background)
+          rmSync(join(monitorDir(), "service.json"), { force: true });
+        monitor.stop();
+        workspace.close();
+        server.closeAllConnections();
+        server.close();
+        setTimeout(() => process.exit(0), 1000).unref();
+      };
+      process.once("SIGTERM", stop);
+      process.once("SIGINT", stop);
     });
     // resolves only if the server closes; Ctrl-C ends the process
     server.on("close", () => _resolve(0));
   });
 }
-
-const PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><title>context-find</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; height: 100vh; display: grid; grid-template-columns: 420px 1fr;
-    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: #0d0d10; color: #d8d8dc; }
-  #left { border-right: 1px solid #26262c; display: flex; flex-direction: column; min-height: 0; }
-  #bar { display: flex; gap: 6px; margin: 10px; }
-  #q { flex: 1; min-width: 0; padding: 8px 10px; background: #16161b; border: 1px solid #26262c;
-    color: #d8d8dc; border-radius: 6px; font: inherit; }
-  #go { padding: 0 12px; background: #16161b; border: 1px solid #26262c; color: #c678dd;
-    border-radius: 6px; font: inherit; cursor: pointer; }
-  #go:hover { background: #1e1e26; border-color: #c678dd; }
-  #nav { margin: 0 10px 8px; font-size: 12px; }
-  #nav a { color: #6a6a72; cursor: pointer; text-decoration: none; }
-  #nav a:hover { color: #c678dd; }
-  #list { overflow-y: auto; flex: 1; }
-  table.mt { border-collapse: collapse; font-size: 13px; }
-  table.mt th, table.mt td { text-align: left; padding: 4px 16px 4px 0; border-bottom: 1px solid #1b1b20; }
-  table.mt th { color: #6a6a72; font-weight: 400; }
-  table.mt td.n { text-align: right; }
-  .row { padding: 8px 12px; border-bottom: 1px solid #1b1b20; cursor: pointer; }
-  .row:hover { background: #16161b; }
-  .row.sel { background: #1e1e26; }
-  .row .top { display: flex; gap: 8px; font-size: 12px; color: #888; }
-  .row .sum { color: #d8d8dc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .badge { font-weight: 700; }
-  .claude { color: #e06c75; } .codex { color: #98c379; }
-  .host { color: #c678dd; }
-  #right { display: flex; flex-direction: column; min-height: 0; position: relative; }
-  #rsearch { display: none; gap: 6px; padding: 6px 12px; background: #16161b;
-    border-bottom: 1px solid #26262c; align-items: center; }
-  #rsearch.open { display: flex; }
-  #rsearch input { flex: 1; min-width: 0; padding: 6px 8px; background: #0d0d10;
-    border: 1px solid #26262c; color: #d8d8dc; border-radius: 4px; font: inherit; font-size: 13px; }
-  #rsearch input:focus { border-color: #c678dd; outline: none; }
-  #rsearch .info { font-size: 12px; color: #6a6a72; white-space: nowrap; min-width: 80px; text-align: right; }
-  #rsearch button { background: none; border: 1px solid #26262c; color: #d8d8dc; border-radius: 4px;
-    padding: 2px 8px; font: inherit; font-size: 13px; cursor: pointer; line-height: 1.4; }
-  #rsearch button:hover { background: #1e1e26; border-color: #c678dd; color: #c678dd; }
-  mark.hit { background: #5c4a16; color: #d8d8dc; border-radius: 2px; }
-  mark.hit.cur { background: #c678dd; color: #0d0d10; }
-  #reader { overflow-y: auto; padding: 16px 24px; white-space: pre-wrap; word-break: break-word; flex: 1; }
-  #reader .user { color: #c678dd; font-weight: 700; }
-  #reader .assistant { color: #56b6c2; font-weight: 700; }
-  #reader .tool { color: #98c379; }
-  #reader .meta { color: #6a6a72; }
-  #hint { color: #6a6a72; padding: 24px; }
-  #err { color: #e06c75; padding: 0 12px; font-size: 12px; }
-</style></head>
-<body>
-  <div id="left">
-    <form id="bar">
-      <input id="q" placeholder="search transcripts" autofocus autocomplete="off">
-      <button id="go" type="submit" title="deep search (Enter)">&#9166;</button>
-    </form>
-    <div id="nav"><a id="mach">&#9776; machines</a></div>
-    <div id="err"></div>
-    <div id="list"></div>
-  </div>
-  <div id="right">
-    <div id="rsearch">
-      <input id="rq" placeholder="find in conversation…" autocomplete="off">
-      <button id="rprev" title="previous (Shift+Enter)">&#9650;</button>
-      <button id="rnext" title="next (Enter)">&#9660;</button>
-      <span class="info" id="rinfo"></span>
-      <button id="rclose" title="close (Esc)">&#10005;</button>
-    </div>
-    <div id="reader"><div id="hint">Search on the left, click a conversation to read it.</div></div>
-  </div>
-<script>
-const T = "__TOKEN__";
-const list = document.getElementById("list");
-const reader = document.getElementById("reader");
-const err = document.getElementById("err");
-const q = document.getElementById("q");
-let rows = [], sel = -1;
-
-function esc(s){ return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-
-async function search(){
-  err.textContent = "searching...";
-  try {
-    const r = await fetch("/api/search?t="+T+"&q="+encodeURIComponent(q.value));
-    const d = await r.json();
-    rows = d.sessions || [];
-    err.textContent = (d.errors||[]).map(e => e.host+": "+e.message).join("  ") ;
-    draw();
-  } catch(e){ err.textContent = String(e); }
-}
-
-function draw(){
-  list.innerHTML = "";
-  rows.forEach((s, i) => {
-    const div = document.createElement("div");
-    div.className = "row" + (i===sel ? " sel" : "");
-    const when = new Date(s.mtime*1000).toLocaleString();
-    const host = s.hostLabel ? '<span class="host">'+esc(s.hostLabel)+'</span>' : 'local';
-    div.innerHTML = '<div class="top"><span class="badge '+s.source+'">'+s.source+'</span>'
-      + '<span>'+when+'</span>'+host+'<span>'+esc(s.branch)+'</span></div>'
-      + '<div class="top">'+esc(s.pretty)+'</div>'
-      + '<div class="sum">'+esc(s.summary)+'</div>';
-    div.onclick = () => open(i);
-    list.appendChild(div);
-  });
-}
-
-async function open(i){
-  sel = i; draw();
-  rClear(); readerRaw = "";
-  const s = rows[i];
-  reader.innerHTML = '<div id="hint">loading...</div>';
-  try {
-    const u = "/api/session?t="+T+"&path="+encodeURIComponent(s.path)
-      + (s.host ? "&host="+encodeURIComponent(s.host) : "");
-    const d = await (await fetch(u)).json();
-    if (d.error){ reader.innerHTML = '<div id="hint">'+esc(d.error)+'</div>'; return; }
-    reader.innerHTML = d.lines.map(([style, text]) =>
-      '<span class="'+style+'">'+esc(text)+'</span>').join("\\n");
-    reader.scrollTop = 0;
-  } catch(e){ reader.innerHTML = '<div id="hint">'+esc(String(e))+'</div>'; }
-}
-
-async function machines(){
-  reader.innerHTML = '<div id="hint">reading machines...</div>';
-  try {
-    const d = await (await fetch("/api/machines?t="+T)).json();
-    if (d.error){ reader.innerHTML = '<div id="hint">'+esc(d.error)+'</div>'; return; }
-    const cell = v => v===null ? "-" : v;
-    reader.innerHTML = '<table class="mt"><thead><tr>'
-      + '<th>machine</th><th>claude</th><th>codex</th><th>total</th><th>last used</th><th>status</th>'
-      + '</tr></thead><tbody>'
-      + (d.machines||[]).map(m => '<tr><td>'+esc(m.name)+'</td>'
-          + '<td class="n">'+cell(m.claude)+'</td><td class="n">'+cell(m.codex)+'</td>'
-          + '<td class="n">'+cell(m.total)+'</td><td>'+esc(cell(m.last))+'</td>'
-          + '<td>'+esc(m.status)+(m.error ? ' - '+esc(m.error) : '')+'</td></tr>').join("")
-      + '</tbody></table>';
-    reader.scrollTop = 0;
-  } catch(e){ reader.innerHTML = '<div id="hint">'+esc(String(e))+'</div>'; }
-}
-
-const rsearch = document.getElementById("rsearch");
-const rq = document.getElementById("rq");
-const rinfo = document.getElementById("rinfo");
-let readerRaw = "";          // original HTML before highlights
-let rmatches = [];           // NodeList turned array of <mark> elements
-let rcur = -1;               // currently focused match index
-
-function rOpen(){
-  rsearch.classList.add("open");
-  rq.focus();
-  rq.select();
-}
-function rClose(){
-  rsearch.classList.remove("open");
-  rClear();
-  rq.value = "";
-}
-function rClear(){
-  if (readerRaw){ reader.innerHTML = readerRaw; readerRaw = ""; }
-  rmatches = []; rcur = -1;
-  rinfo.textContent = "";
-}
-
-function rHighlight(){
-  const needle = rq.value.trim();
-  rClear();
-  if (!needle) return;
-  readerRaw = reader.innerHTML;
-  const escaped = needle.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
-  const re = new RegExp("(" + escaped + ")", "gi");
-  const walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT);
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  for (const node of nodes) {
-    if (!re.test(node.textContent)) continue;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    node.textContent.replace(re, (m, g, off) => {
-      if (off > last) frag.appendChild(document.createTextNode(node.textContent.slice(last, off)));
-      const mark = document.createElement("mark");
-      mark.className = "hit";
-      mark.textContent = m;
-      frag.appendChild(mark);
-      last = off + m.length;
-      return m;
-    });
-    if (last < node.textContent.length) frag.appendChild(document.createTextNode(node.textContent.slice(last)));
-    node.parentNode.replaceChild(frag, node);
-  }
-  rmatches = Array.from(reader.querySelectorAll("mark.hit"));
-  if (rmatches.length){ rcur = 0; rShow(); }
-  else { rinfo.textContent = "no matches"; }
-}
-
-function rShow(){
-  rmatches.forEach((m,i) => { m.classList.toggle("cur", i === rcur); });
-  rinfo.textContent = rmatches.length ? (rcur+1) + " / " + rmatches.length : "no matches";
-  if (rmatches[rcur]) rmatches[rcur].scrollIntoView({ block: "center", behavior: "smooth" });
-}
-function rNext(){ if (!rmatches.length) return; rcur = (rcur+1) % rmatches.length; rShow(); }
-function rPrev(){ if (!rmatches.length) return; rcur = (rcur - 1 + rmatches.length) % rmatches.length; rShow(); }
-
-rq.addEventListener("input", rHighlight);
-rq.addEventListener("keydown", e => {
-  if (e.key === "Enter"){ e.preventDefault(); e.shiftKey ? rPrev() : rNext(); }
-  if (e.key === "Escape"){ e.preventDefault(); rClose(); }
-});
-document.getElementById("rnext").addEventListener("click", rNext);
-document.getElementById("rprev").addEventListener("click", rPrev);
-document.getElementById("rclose").addEventListener("click", rClose);
-
-document.addEventListener("keydown", e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "f"){
-    // Only intercept when a conversation is loaded (not showing the hint)
-    if (reader.querySelector("#hint")) return;
-    e.preventDefault();
-    rOpen();
-  }
-});
-
-
-// A form submit fires on Enter in the field and on the button, in every browser.
-document.getElementById("bar").addEventListener("submit", e => { e.preventDefault(); search(); });
-document.getElementById("mach").addEventListener("click", machines);
-search();
-</script>
-</body></html>`;

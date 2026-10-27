@@ -8,7 +8,8 @@ Search every Claude Code and Codex conversation you have ever had — across pro
 
 - **Claude Code + Codex in one place.** Search both transcript stores with one command.
 - **Cross-machine search over SSH.** Search another machine without installing an agent there.
-- **No index, daemon, or cloud copy.** Conversations stay where they already live.
+- **Live local dashboard.** Monitor usage and running agents, browse sessions, and chat through your installed tools.
+- **Optional background daemon.** Refresh local sessions without keeping a terminal or browser open.
 
 ## Install
 
@@ -39,6 +40,97 @@ context-find --list-machines        # see every searchable machine
 ```
 
 Inside the browser, press `/` to filter, arrows to move, `v` or `tab` to read, `enter` or `r` to resume, and `esc` to leave.
+
+## Live dashboard and daemon
+
+```sh
+cfind daemon install   # install collectors and macOS login startup; start now
+cfind web              # open the browser dashboard
+cfind daemon status    # show the running daemon
+cfind daemon stop      # stop it, including the current launchd job
+cfind daemon start     # start collection in the background
+cfind daemon           # same as daemon start
+```
+
+`service` is an alias for `daemon`; `cfind service` alone shows status.
+The dashboard defaults to `http://127.0.0.1:4319`. Use `--port N` when installing
+or starting to select another port. A running daemon is reused by `cfind web`.
+`cfind web` also runs without installing a daemon; that server stops when its
+terminal exits.
+
+The daemon checks for new and changed transcript files every 1.5 seconds, reads
+only appended records, and sends live updates to the browser. macOS login startup
+uses `~/Library/LaunchAgents/com.context-find.dashboard.plist` with `RunAtLoad`
+and `KeepAlive`. Use `cfind daemon install` again to re-enable login startup after
+stopping it. `daemon start` starts a detached process; `install` adds launchd
+supervision. The daemon runs while you are logged in; it does not prevent sleep.
+
+The dashboard includes:
+
+- Light and dark appearance, session and weekly remaining quota, and reset timers.
+- Separate analytics for Codex, `~/.claude`, and `~/.claude-personal`, plus configured
+  extra Claude stores. Environment overrides are respected.
+- Date and profile filters, daily token charts, model and project breakdowns, cache
+  usage, and vendor-reported API value when available. API value is a partial
+  list-price estimate, not a subscription bill.
+- Session search, project filters, and find within a conversation.
+- A chat view for each session: agent replies on the left, your messages on the right,
+  Markdown and code blocks with copy buttons, and expandable tool calls with their
+  input and output. Remote sessions keep the plain transcript view.
+- A message box in the chat view. Enter sends; Shift Enter adds a line. While an agent
+  works, new messages wait in a queue that you can edit. Stop ends the current reply.
+- Images: attach up to 4 PNG, JPEG, GIF or WebP files (10 MB each) with the image
+  button, paste, or drag and drop. Browser agents get the image itself. Codex queue
+  and tmux sends get the saved file's path in the text, and the agent opens it.
+  Images in transcripts show in the chat; click one to view it large.
+- Approval and question cards: allow once, allow for this session, or decline. Click an
+  option to answer a question, or type your own answer. For Claude, a message typed
+  while an approval waits declines it and tells Claude what to do instead.
+- Agent cards for browser workspace agents and for every session open in a terminal
+  (idle ones in the Idle lane), with child agents.
+- Subscription sign-in through the installed Codex and Claude tools. Credentials
+  remain with those tools; the dashboard does not read credential files.
+
+An external active session is **observed**, not silently resumed into a second
+process. Its chat view follows the transcript live. If the session runs in tmux (Claude
+records the pane), the message box types into that pane while the agent waits at its
+prompt or works on a reply; while a menu or question is open the box is read-only. Outside tmux the box is
+read-only, and **Take over** (two clicks) stops the terminal process after checking its
+PID and start time, so the session continues here. For Codex, the dashboard checks
+which process has the session file open: if Codex's shared background helper has it,
+the message goes through `codex queue` (it runs now, or after the current reply); if a
+`--no-daemon` Codex window has it, the box refuses; if nobody has it, the session
+continues here. An inactive
+local session can be continued from its chat view: the first message starts a browser
+agent that resumes the session, and the earlier messages stay visible above it. Child
+transcripts can be selected once the tool has written them locally. Unknown or stale
+activity is labelled.
+
+Codex live-record collection is not installed: with CLI 0.163.0 and shared server 0.164.0, lifecycle hooks run in the server and inherit its PID ancestry and tmux pane, not the attached TUI's identity. The collector must not guess ownership from those values. See `feat_codex_live_record_test.md` for the real-run evidence. The dashboard uses `codex queue --thread <SESSION_ID> --message <TEXT>` instead (see above).
+
+Claude collection is added alongside existing hooks. The existing status-line
+command is wrapped, and its output is preserved. Original settings are backed up
+at `settings.json.cfind-backup` in each profile. Existing sessions may need to be
+restarted to load hooks; quota telemetry arrives when a terminal status line runs.
+Print/SDK sessions do not necessarily publish quota telemetry. The UI never fills
+missing quotas with estimated values.
+
+Metadata, token buckets, parser offsets, recent browser-workspace messages, and
+selected telemetry are saved privately under `~/.context-find/dashboard`.
+Attached images are saved in its `uploads` folder and removed after 30 days.
+The collector does not copy full transcripts. Browser agents use the installed
+tools, which can write files and execute commands under their normal permission
+rules. Closing a tab does not stop an agent; use its Stop control.
+
+## iPhone and Mac apps
+
+The native apps live in [cfind-apple](https://github.com/ayush-gzip/cfind-apple). They
+show the same sessions, agents, usage and chat as the dashboard. The Mac app connects to
+this daemon directly and posts notifications when an agent needs you or finishes. The
+iPhone app reaches the Mac through Tailscale (`tailscale serve --bg 4319`) and pairs
+under Connections > Pair an iPhone. Each phone gets its own token; the Mac stores only
+its hash, and removing the phone under Connections cuts it off. Phones cannot pair other
+devices or sign in to the tools.
 
 ## Why
 
@@ -219,9 +311,9 @@ A host that is asleep, unreachable or misconfigured prints one warning line and 
 
 ## Safety
 
-`context-find` reads transcripts and never writes to them. It makes no copy of your conversations anywhere: no index file, no database, no cloud sync. Remote searches run over your existing ssh trust, and only matching results cross the wire, inside a session ssh has already encrypted.
+Terminal search reads transcripts without modifying them or maintaining a search index. The optional dashboard stores local metrics, transcript metadata, and recent browser-workspace messages. Nothing is uploaded by the collector. Prompts sent through browser agents go to the selected tool’s provider under its existing account. Remote searches run over your existing SSH trust.
 
-This is deliberate. Transcripts hold whatever you have pasted into a prompt, which in practice means account identifiers, customer data, internal hostnames and sometimes credentials. A synced or cached copy of that corpus is a far larger thing to protect than the transcripts already sitting under your home directory. So the tool does not create one.
+This is deliberate. Transcripts hold whatever you have pasted into a prompt, which in practice means account identifiers, customer data, internal hostnames and sometimes credentials. A synced or cached copy of that corpus is a far larger thing to protect than the transcripts already sitting under your home directory. The dashboard cache stays on this machine, under your home directory, with private file permissions.
 
 The tradeoff is that a machine must be reachable at the moment you search it. If yours sleeps, enabling wake on network access, or putting both machines on a private mesh such as Tailscale, closes that gap without leaving a copy of anything at rest.
 
@@ -238,7 +330,7 @@ Details worth knowing:
 
 Both tools write conversations as JSONL under your home directory. `context-find` reads those files directly and never modifies them.
 
-- **No index and no daemon.** A full scan of 122 MB across 212 Claude transcripts takes about 0.2 s, which is faster than keeping an index honest. Adding Codex did not change that materially.
+- **Terminal search needs no daemon.** The optional dashboard daemon caches usage metrics and tracks changed files independently of terminal search.
 - **Every store on the machine is searched.** Setting `CLAUDE_CONFIG_DIR` for some shells splits your history in two; `context-find` reads both it and `~/.claude`. On the machine this was built on, that was the difference between 64 and 68 results for the same query.
 - **Subagent sidechains are skipped**, since they have no session of their own to resume.
 - **Injected preambles never become a summary.** Hook output, system reminders, IDE notices, slash-command wrappers and Codex's AGENTS.md block are not what you typed, so the row shows the first thing you actually said. Press `t` in the reader to see the rest.

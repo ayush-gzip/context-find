@@ -9,7 +9,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').copyFileSync('../src/context_find/store.py','dist/store.py')\"",
+    "build": "tsc && node -e \"const f=require('fs'); f.copyFileSync('../src/context_find/store.py','dist/store.py'); f.cpSync('src/dashboard','dist/dashboard',{recursive:true})\"",
     "dev": "tsc && node dist/cli.js",
     "test": "npm run build && node test/run.mjs",
     "typecheck": "tsc --noEmit"

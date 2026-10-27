@@ -44,6 +44,7 @@ import {
   type Session,
   type Source,
 } from "./store.ts";
+import { serviceCommand } from "./service.ts";
 import { serveWeb } from "./web.ts";
 import * as banner from "./banner.ts";
 
@@ -54,7 +55,9 @@ context-find - search and resume Claude Code conversations
 
   context-find [query] [options]
   context-find show <path> [--host SSH]   cat one session's transcript as text
-  context-find web [--port N]             open a read-only browser view
+  context-find web [--port N]             open the live agent dashboard
+
+  context-find daemon [start|stop|status|install]  manage background collection
 
   query            text to find in transcripts; omit to browse everything
 
@@ -473,7 +476,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     );
   }
 
+  if (positionals[0] === "service" || positionals[0] === "daemon") {
+    setExtraConfigDirs([...values["extra-dir"], join(homedir(), '.claude-personal')]);
+    const port = Number(values.port) || 4319;
+    return serviceCommand(positionals[1] ?? (positionals[0] === 'daemon' ? 'start' : 'status'), port, () => serveWeb([], port, true));
+  }
   if (positionals[0] === "web") {
+    setExtraConfigDirs([...values["extra-dir"], join(homedir(), '.claude-personal')]);
     debug("selected mode: web");
     const webHosts = values.local
       ? []
