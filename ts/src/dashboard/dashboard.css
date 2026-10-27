@@ -13,7 +13,7 @@
   --selection: #0000000a;
   --blue: #007aff;
   --green: #34a853;
-  --sidebar: 210px;
+  --sidebar: 218px;
   --shadow: none;
   --user-bubble: #eaf2ff;
   --agent-bubble: #f4f4f6;
@@ -167,8 +167,8 @@ textarea::placeholder {
 /* A small pane of glass floating at the left edge. */
 .sidebar {
   position: fixed;
-  inset: 8px auto 8px 8px;
-  width: calc(var(--sidebar) - 16px);
+  inset: 12px auto 12px 12px;
+  width: calc(var(--sidebar) - 24px);
   padding: 14px 8px 10px;
   background: var(--sidebar-bg);
   -webkit-backdrop-filter: blur(30px) saturate(1.8);
@@ -1460,11 +1460,12 @@ label textarea {
   display: none;
 }
 .drawer.full {
-  width: 100vw;
+  width: calc(100vw - var(--sidebar));
   border-left: 0;
   box-shadow: none;
 }
 /* Full screen keeps the chat in a readable centered column. */
+.drawer.full .drawer-head,
 .drawer.full .conversation,
 .drawer.full .reader-find,
 .drawer.full .composer {
@@ -1492,6 +1493,9 @@ label textarea {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.drawer-head small .state-dot {
+  vertical-align: 1px;
 }
 .drawer-head small {
   font-size: 11.5px;
@@ -1983,6 +1987,8 @@ label textarea {
   max-height: 220px;
   /* One line is 26px, the height of the buttons beside it. */
   padding: 3px 0;
+  /* Text wraps; at some zoom levels WebKit still showed a sideways scrollbar. */
+  overflow-x: hidden;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2188,7 +2194,7 @@ label textarea {
 }
 @media (max-width: 1200px) {
   :root {
-    --sidebar: 210px;
+    --sidebar: 218px;
   }
   .sidebar {
     padding-left: 12px;
@@ -2332,7 +2338,7 @@ label textarea {
 }
 @media (max-width: 760px) {
   :root {
-    --sidebar: 72px;
+    --sidebar: 80px;
   }
   .sidebar {
     padding: 12px 6px;

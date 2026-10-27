@@ -73,11 +73,13 @@ const elapsed = (t) => {
       : `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m`;
 };
 const folder = (p) =>
-  String(p || "Unknown project")
-    .split(/[\\/]/)
-    .filter(Boolean)
-    .slice(-2)
-    .join("/");
+  /^\/(Users|home)\/[^/]+\/?$/.test(p || "")
+    ? "~"
+    : String(p || "Unknown project")
+        .split(/[\\/]/)
+        .filter(Boolean)
+        .slice(-2)
+        .join("/");
 const state = (s) =>
   ({
     idle: "Idle",
@@ -607,6 +609,8 @@ function render() {
   window.scrollTo(0, scroll);
 }
 function navigate(page) {
+  // A full-screen chat would hide the section, so it closes.
+  if (S.view && S.chatFull) closeDrawer();
   if (page !== "sessions") S.project = "all";
   if (!labels[page]) page = "overview";
   S.page = page;
@@ -703,6 +707,8 @@ function openView(view) {
   S.view = view;
   S.chat = { key: viewKey(), history: [], omitted: 0, loading: true };
   tellApp();
+  // Esc makes one chat smaller; the next chat opens at the saved size.
+  S.chatFull = localStorage.getItem("cfind-chat-size") !== "panel";
   const drawer = $("#drawer");
   drawer.hidden = false;
   drawer.classList.toggle("full", S.chatFull);
@@ -1618,9 +1624,22 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     setSidebar(!document.documentElement.classList.contains("sidebar-hidden"));
   }
-  // Escape in an open dialog closes only the dialog.
-  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]"))
-    closeDrawer();
+  // ⌘1 to ⌘6 open the sidebar sections in order.
+  const pages = $$(".nav-item[data-page]").map((b) => b.dataset.page),
+    n = Number(e.key);
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && pages[n - 1]) {
+    e.preventDefault();
+    navigate(pages[n - 1]);
+  }
+  // Escape in an open dialog closes only the dialog. A full-screen chat
+  // first becomes the side panel, then closes.
+  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]")) {
+    if (S.view && S.chatFull) {
+      S.chatFull = false;
+      $("#drawer").classList.remove("full");
+      renderChat();
+    } else closeDrawer();
+  }
   if (
     e.key === "Enter" &&
     !e.shiftKey &&

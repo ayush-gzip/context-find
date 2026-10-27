@@ -92,6 +92,11 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E33 | message box alignment | one line: text box and buttons both 26px tall, same top; two lines: buttons sit on the last line (textarea 46px, attach top = textarea top + 20). Pass |
 | E34 | ⌘K command menu and single-key shortcuts | ⌘K lists commands; typing "cfind" lists matching sessions (12 items); ↓ + Return runs one; `g s` goes to Sessions; `?` opens the shortcut list; no page errors (Chrome); the same in WKWebView. Pass |
 | E30 | small glass sidebar, light, dark, and 700 px wide | floating pane 10 px from the edges, blur, 210 px wide; icons only under 760 px. Screenshots checked. Pass |
+| E35 | message box at Mac zoom 0.9, 1, 1.1, 1.2 (WKWebView, `pageZoom`) | no sideways scrollbar; visible height 26 to 27 px (it was 12 px at 1.1, which cut the placeholder). Pass |
+| E36 | full-screen chat header | header lines up with the chat column; home folder shows as `~`; the state dot sits level with the text. Screenshot checked. Pass |
+| E37 | sidebar beside a full-screen chat | chat starts at the sidebar edge (218 px), sidebar stays visible; with ⌘B the chat uses the full width; sidebar 12 px from the window edge. Pass |
+| E38 | ⌘1 to ⌘6 | ⌘3 → #sessions, ⌘4 → #usage, ⌘1 → #overview (Chrome, WKWebView native keys, Mac UI test). A full-screen chat closes when you change section. Pass |
+| E39 | Esc on a full-screen chat | first Esc → side panel, second Esc → closed; the saved size stays full, so the next chat opens full screen. Pass |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"
