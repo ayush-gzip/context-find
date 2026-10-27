@@ -317,7 +317,7 @@ test("Fix 5: JSONL containing null, numbers, or corrupt records does not crash P
     [STORE_PY, "--scan", "valid session"],
     {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_CONFIG_DIR: dir },
+      env: { ...process.env, HOME: dir, CLAUDE_CONFIG_DIR: dir, CODEX_HOME: join(dir, "codex") },
     },
   );
 
