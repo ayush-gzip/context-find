@@ -84,6 +84,10 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E24 | real work session with task notices and a pasted prompt | title "refer to <client> AWS profiles…" (no tags), 0 titles with tags across all sessions; notices show as notes, e.g. `Background command "Deploy <stack> with CDK" completed (exit code 0)`. Pass |
 | E25 | Agents board with 4 Claude sessions open in tmux (1 busy, 1 `shell`, 2 idle) | before: only this session showed; the work session (status `shell`, 7 background scans) showed "Unknown" and its box refused sends. After: Running = 2 (incl. the work session), Idle = 2; finished subagents of an idle session are hidden. Pass |
 | E26 | open tab, then `launchctl kickstart -k` | before: the new run had a new URL token, the tab's stream got 403 and stayed "Reconnecting". After: the daemon keeps its token in `~/.context-find/dashboard/token` (0600); badge went Reconnecting, then Live, with no reload. Pass |
+| E27 | ⌘B (Ctrl+B) in Chrome and in the Mac app | sidebar hides, content takes the width (`.shell` margin 0); again shows it; choice kept in `localStorage` `cfind-sidebar`. Pass |
+| E28 | Agents board, an agent with 3 subagents | folded under "› 3 subagents"; click unfolds; stays open across board redraws (`S.openKids`). Long prompts wrap inside the card and clamp to 3 lines. Pass |
+| E29 | page with a stub `window.webkit.messageHandlers.cfind` | opening a chat posts `session:<path>`; Escape posts an empty string (the Mac app uses this to skip banners for the chat on screen). Pass |
+| E30 | small glass sidebar, light, dark, and 700 px wide | floating pane 10 px from the edges, blur, 210 px wide; icons only under 760 px. Screenshots checked. Pass |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"

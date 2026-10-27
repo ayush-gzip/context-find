@@ -27,6 +27,8 @@ const S = {
   drafts: {},
   images: {},
   chatFull: localStorage.getItem("cfind-chat-size") !== "panel",
+  // Agents whose subagents the user unfolded.
+  openKids: new Set(),
   phones: { devices: [] },
   pairing: null,
   login: null,
@@ -330,8 +332,14 @@ function allAgents() {
     }));
   return [...owned, ...observed].filter((a) => inScope(a.profile));
 }
+function kids(children) {
+  const live = children.filter((c) =>
+    ["running", "waiting"].includes(c.state),
+  ).length;
+  return `${children.length} subagent${children.length === 1 ? "" : "s"}${live ? ` · ${live} running` : ""}`;
+}
 function agentCard(a) {
-  return `<div><button class="agent-card" data-agent="${esc(a.id)}" data-owned="${a.owned ? "1" : "0"}" data-profile-id="${esc(a.profile)}" style="width:100%"><div class="agent-top"><span><i class="state-dot ${esc(a.state)}"></i>${esc(state(a.state))}</span><span>${a.owned ? "In workspace" : "External session"}</span></div><h3>${esc(a.title || "Agent session")}</h3><div class="agent-meta">${esc(folder(a.cwd))}</div><div class="agent-bottom"><span style="color:${colors[a.profile] || colors.claude}">${esc(profileLabel(a.profile))}</span><span>${esc(a.model || "Default model")} · ${elapsed(a.startedAt)}</span></div>${a.queue?.length ? `<div class="agent-meta" style="margin-top:12px">${a.queue.length} prompt${a.queue.length === 1 ? "" : "s"} queued</div>` : ""}</button>${a.children?.length ? `<div class="agent-children">${a.children.map((c) => `<div class="child-card" role="button" tabindex="0" data-child="${esc(c.id)}" data-profile-id="${esc(a.profile)}"><span class="state-dot ${esc(c.state)}"></span> ${esc(c.task)}<small><span>↳ ${esc(state(c.state))}</span><span>${esc(c.model || "Subagent")}</span></small></div>`).join("")}</div>` : ""}</div>`;
+  return `<div><button class="agent-card" data-agent="${esc(a.id)}" data-owned="${a.owned ? "1" : "0"}" data-profile-id="${esc(a.profile)}" style="width:100%"><div class="agent-top"><span><i class="state-dot ${esc(a.state)}"></i>${esc(state(a.state))}</span><span>${a.owned ? "In workspace" : "External session"}</span></div><h3>${esc(a.title || "Agent session")}</h3><div class="agent-meta">${esc(folder(a.cwd))}</div><div class="agent-bottom"><span style="color:${colors[a.profile] || colors.claude}">${esc(profileLabel(a.profile))}</span><span>${esc(a.model || "Default model")} · ${elapsed(a.startedAt)}</span></div>${a.queue?.length ? `<div class="agent-meta" style="margin-top:12px">${a.queue.length} prompt${a.queue.length === 1 ? "" : "s"} queued</div>` : ""}</button>${a.children?.length ? `<details class="subagents" data-parent="${esc(a.id)}"${S.openKids.has(a.id) ? " open" : ""}><summary>${kids(a.children)}</summary><div class="agent-children">${a.children.map((c) => `<div class="child-card" role="button" tabindex="0" data-child="${esc(c.id)}" data-profile-id="${esc(a.profile)}"><span class="child-task"><span class="state-dot ${esc(c.state)}"></span> ${esc(c.task)}</span><small><span>↳ ${esc(state(c.state))}</span><span>${esc(c.model || "Subagent")}</span></small></div>`).join("")}</div></details>` : ""}</div>`;
 }
 function activeCanvas() {
   const agents = allAgents().filter((a) =>
@@ -649,6 +657,10 @@ function viewKey() {
       ? "agent:" + S.view.id
       : "session:" + S.view.s.path;
 }
+// The Mac app skips banners for the chat on screen.
+function tellApp() {
+  window.webkit?.messageHandlers?.cfind?.postMessage(viewKey());
+}
 function viewAgent() {
   return S.view?.kind === "agent"
     ? S.workspace.agents.find((a) => a.id === S.view.id)
@@ -657,6 +669,7 @@ function viewAgent() {
 function closeDrawer() {
   S.view = null;
   S.chat = null;
+  tellApp();
   $("#drawer").hidden = true;
   $("#drawer").innerHTML = "";
 }
@@ -689,6 +702,7 @@ window.cfindOpen = (kind, id) =>
 function openView(view) {
   S.view = view;
   S.chat = { key: viewKey(), history: [], omitted: 0, loading: true };
+  tellApp();
   const drawer = $("#drawer");
   drawer.hidden = false;
   drawer.classList.toggle("full", S.chatFull);
@@ -1212,6 +1226,7 @@ async function sendFromComposer() {
         S.workspace.agents.unshift(created);
         S.view = { kind: "agent", id: created.id };
         S.chat.key = viewKey();
+        tellApp();
         renderChat();
       }
     }
@@ -1576,6 +1591,10 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     openNew();
   }
+  if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+    e.preventDefault();
+    setSidebar(!document.documentElement.classList.contains("sidebar-hidden"));
+  }
   // Escape in an open dialog closes only the dialog.
   if (e.key === "Escape" && !e.isComposing && !$("dialog[open]"))
     closeDrawer();
@@ -1655,6 +1674,20 @@ function setTheme(theme) {
   );
 }
 setTheme(localStorage.getItem("cfind-theme") || "light");
+function setSidebar(hidden) {
+  document.documentElement.classList.toggle("sidebar-hidden", hidden);
+  localStorage.setItem("cfind-sidebar", hidden ? "hidden" : "shown");
+}
+setSidebar(localStorage.getItem("cfind-sidebar") === "hidden");
+// The board redraws often; keep unfolded subagents open across redraws.
+document.addEventListener(
+  "toggle",
+  (e) => {
+    const id = e.target.dataset?.parent;
+    if (id) e.target.open ? S.openKids.add(id) : S.openKids.delete(id);
+  },
+  true,
+);
 $("#theme-toggle").onclick = () =>
   setTheme(
     document.documentElement.dataset.theme === "light" ? "dark" : "light",

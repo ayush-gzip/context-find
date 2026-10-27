@@ -2,7 +2,9 @@
   color-scheme: light;
   --bg: #f5f5f7;
   --surface: #fff;
-  --sidebar-bg: #ededf0;
+  --sidebar-bg: #ffffffa6;
+  --glass-edge: #ffffffcc;
+  --glass-shadow: 0 0 0 0.5px #0000000f, 0 12px 40px #0000000d;
   --text: #1d1d1f;
   --muted: #86868b;
   --secondary: #6e6e73;
@@ -11,7 +13,7 @@
   --selection: #e0e1e7;
   --blue: #007aff;
   --green: #34a853;
-  --sidebar: 238px;
+  --sidebar: 210px;
   --shadow: 0 2px 8px #00000003, 0 12px 40px #00000002;
   --user-bubble: #e8f1ff;
   --agent-bubble: #f0f0f3;
@@ -25,7 +27,9 @@
   color-scheme: dark;
   --bg: #161618;
   --surface: #232326;
-  --sidebar-bg: #1c1c1e;
+  --sidebar-bg: #2c2c2e8c;
+  --glass-edge: #ffffff14;
+  --glass-shadow: 0 0 0 0.5px #00000080, 0 12px 40px #00000066;
   --text: #f5f5f7;
   --muted: #8e8e93;
   --secondary: #aeaeb2;
@@ -155,35 +159,40 @@ input::placeholder,
 textarea::placeholder {
   color: var(--muted);
 }
+/* A small pane of glass floating at the left edge. */
 .sidebar {
   position: fixed;
-  inset: 0 auto 0 0;
-  width: var(--sidebar);
-  padding: 34px 16px 20px;
+  inset: 10px auto 10px 10px;
+  width: calc(var(--sidebar) - 20px);
+  padding: 22px 10px 14px;
   background: var(--sidebar-bg);
-  border-right: 1px solid #00000006;
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+  border: 1px solid var(--glass-edge);
+  border-radius: 18px;
+  box-shadow: var(--glass-shadow);
   display: flex;
   flex-direction: column;
   z-index: 20;
 }
 .brand {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  padding: 0 15px;
-  font-size: 25px;
+  padding: 0 8px;
+  font-size: 19px;
   font-weight: 650;
   letter-spacing: -1px;
 }
 .brand-symbol {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   background: var(--text);
   color: var(--bg);
-  font-size: 29px;
+  font-size: 22px;
   font-weight: 550;
   font-style: italic;
   line-height: 1;
@@ -194,8 +203,8 @@ textarea::placeholder {
   display: flex;
   gap: 11px;
   align-items: center;
-  padding: 18px 14px 24px;
-  margin-top: 25px;
+  padding: 12px 8px 14px;
+  margin-top: 14px;
   font-size: 12px;
   font-weight: 550;
 }
@@ -215,27 +224,27 @@ textarea::placeholder {
   background: #dbdce2;
   color: #767983;
   border-radius: 8px;
-  width: 31px;
-  height: 31px;
-  font-size: 20px;
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
   font-weight: 400;
 }
 .nav-label {
   font-size: 11px;
   color: var(--muted);
-  padding: 0 15px;
-  margin: 12px 0;
+  padding: 0 8px;
+  margin: 8px 0;
 }
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 9px;
   width: 100%;
-  padding: 12px 14px;
-  margin-bottom: 4px;
+  padding: 8px 9px;
+  margin-bottom: 2px;
   border-radius: 9px;
   text-align: left;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 450;
   transition: background 0.15s;
 }
@@ -277,7 +286,7 @@ textarea::placeholder {
   display: flex;
   gap: 9px;
   align-items: flex-start;
-  padding: 16px 14px 25px;
+  padding: 12px 8px 14px;
   font-size: 11px;
   color: var(--secondary);
 }
@@ -293,7 +302,7 @@ textarea::placeholder {
 .sidebar-foot {
   font-size: 10px;
   color: var(--muted);
-  padding: 20px 14px 0;
+  padding: 10px 8px 0;
 }
 .online-dot {
   display: inline-block;
@@ -947,6 +956,7 @@ main {
   background: #ff6961;
 }
 .agent-card h3 {
+  overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.5;
   font-weight: 500;
@@ -984,8 +994,29 @@ main {
   margin: 0 0 0 16px;
   padding: 15px 0 0 16px;
 }
+.subagents summary {
+  margin: 10px 0 0 16px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.subagents summary::-webkit-details-marker {
+  display: none;
+}
+.subagents summary:before {
+  content: "›";
+  display: inline-block;
+  width: 12px;
+  transition: transform 0.15s;
+}
+.subagents[open] summary:before {
+  transform: rotate(90deg);
+}
 .child-card {
   position: relative;
+  overflow-wrap: anywhere;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -1002,6 +1033,13 @@ main {
   width: 16px;
   height: 1px;
   background: #c3c7ce;
+}
+/* Long prompts stay inside the card. */
+.child-task {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .child-card small {
   display: flex;
@@ -2288,10 +2326,10 @@ label textarea {
 }
 @media (max-width: 760px) {
   :root {
-    --sidebar: 68px;
+    --sidebar: 72px;
   }
   .sidebar {
-    padding: 25px 8px;
+    padding: 18px 6px;
   }
   .brand {
     padding: 0;
@@ -2317,7 +2355,7 @@ label textarea {
   .nav-item {
     font-size: 0;
     justify-content: center;
-    padding: 13px 10px;
+    padding: 10px 0;
   }
   .nav-item > span:first-child {
     width: 21px;
@@ -2807,4 +2845,11 @@ label textarea {
 .device-row small {
   flex: 1;
   color: var(--muted);
+}
+/* ⌘B hides the sidebar. */
+:root.sidebar-hidden {
+  --sidebar: 0px;
+}
+.sidebar-hidden .sidebar {
+  display: none;
 }
