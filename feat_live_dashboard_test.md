@@ -106,6 +106,7 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E46 | `cfind` is the service only (`ts/src/cli.ts`; ui.tsx, rows.ts, ink, react removed) | `cfind` → "Already running on port 4319" (exit 0); `cfind daemon status` → running + URL; `cfind ebs` → exit 1 "cfind no longer searches in the terminal…dashboard"; `cfind --json` → exit 1 unknown option; `--help` lists only the service, machines and onboarding options; `--list-machines` prints the table. Pass |
 | E47 | the LaunchAgent still starts with the new CLI | `launchctl kickstart -k` → service runs (`cli.js service run --local` from the old plist; `--local` accepted and ignored); dashboard 200. New plists drop `--local`. Pass |
 | E48 | the service reads `~/.context-find/hosts` (before: only `cfind web` did; the service ran local-only) | code path: `serveWeb(readHosts(), …)`. Remote search in the dashboard not run: the only host (macmini) does not resolve today. Not tested |
+| E49 | ⌘⇧F toggles the open chat between full screen and side panel (Chrome) | full → panel → full, also while typing in the message box; listed in the ? shortcuts. In the Mac app not run (the UI test would quit the app in use); no standard macOS menu item uses ⇧⌘F. Pass in Chrome |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"

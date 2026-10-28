@@ -1735,6 +1735,11 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     setSidebar(!document.documentElement.classList.contains("sidebar-hidden"));
   }
+  // ⌘⇧F switches the open chat between full screen and the side panel.
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === "KeyF" && S.view) {
+    e.preventDefault();
+    $("[data-chat-size]")?.click();
+  }
   // ⌘1 to ⌘6 open the sidebar sections in order.
   const pages = $$(".nav-item[data-page]").map((b) => b.dataset.page),
     n = Number(e.key);
