@@ -723,10 +723,15 @@ function openView(view) {
   void loadHistory();
 }
 function grow(t) {
+  // The auto height below lets the chat scroll for a moment; without this the
+  // chat jumped up and down on every key.
+  const list = $("#chat-list"),
+    fromBottom = list && list.scrollHeight - list.scrollTop - list.clientHeight;
   t.style.height = "auto";
   t.style.height = Math.min(t.scrollHeight, 220) + "px";
   // Sub-pixel line heights round up; only scroll once the box reaches its limit.
   t.style.overflowY = t.scrollHeight > 220 ? "auto" : "hidden";
+  if (list) list.scrollTop = list.scrollHeight - list.clientHeight - fromBottom;
 }
 async function loadHistory() {
   const chat = S.chat,
