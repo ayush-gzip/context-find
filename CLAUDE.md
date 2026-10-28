@@ -83,10 +83,8 @@ Check for an existing `feat_<feature_name>_test.md` before writing a new one —
 - **`ts/src/store.ts`** — Local transcript discovery, scanning, and rendering. Maintained in strict parity with `store.py`.
 - **`ts/src/remote.ts`** — SSH transport, host configuration (`~/.context-find/hosts`), argument transport, output bounds, response validation, and shell quoting.
 - **`ts/src/search.ts`** — Progressive local-then-remote search with subscriber notifications.
-- **`ts/src/rows.ts`** — Terminal layout, truncation, and keyboard navigation math.
-- **`ts/src/ui.tsx`** — Interactive Ink/React terminal UI for browsing, reading, and resuming sessions.
 - **`ts/src/web.ts`** — Localhost-only web interface with single-page reader, Host header validation, and strict token authentication.
-- **`ts/src/cli.tsx`** — CLI entry point, list mode, `show` command, `web` mode, and resume dispatch.
+- **`ts/src/cli.ts`** — CLI entry point: starts and manages the dashboard service, `--list-machines`, `--onboard-external`. It no longer searches; the dashboard and apps do.
 
 ## Build & Test
 

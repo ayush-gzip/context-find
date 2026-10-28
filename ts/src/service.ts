@@ -105,7 +105,6 @@ export async function serviceCommand(
         cli,
         "service",
         "run",
-        "--local",
         "--port",
         String(port),
       ];
@@ -169,7 +168,6 @@ export async function serviceCommand(
         fileURLToPath(new URL("./cli.js", import.meta.url)),
         "service",
         "run",
-        "--local",
         "--port",
         String(port),
       ],

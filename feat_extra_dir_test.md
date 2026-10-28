@@ -1,5 +1,7 @@
 # `--extra-dir` and per-store resume: test record
 
+> 2026-10-28: the terminal list, `--json`, `--list`, `show`, `web`, `--host`, `--local` and the Ink UI were removed; `cfind` now only runs the dashboard service. Cases below about them are history. Current CLI cases: `feat_live_dashboard_test.md` E46 to E48.
+
 ## What was tested
 
 - `--extra-dir DIR` (repeatable) adds a Claude config dir to the local search.

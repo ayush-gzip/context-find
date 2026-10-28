@@ -83,14 +83,6 @@ export function projectsRoots(): string[] {
   return roots;
 }
 
-/** The config dir whose store holds this transcript, or null for the default ~/.claude.
- *  Resume sets CLAUDE_CONFIG_DIR from it: claude only finds a session in its own store. */
-export function claudeConfigDir(path: string): string | null {
-  const root = projectsRoots().find((candidate) => path.startsWith(candidate + sep));
-  const dir = root ? dirname(root) : null;
-  return dir && dir !== join(homedir(), ".claude") ? dir : null;
-}
-
 function isDir(path: string): boolean {
   try {
     return statSync(path).isDirectory();

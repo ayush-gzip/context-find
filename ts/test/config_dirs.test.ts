@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { claudeConfigDir, projectsRoots, setExtraConfigDirs } from "../src/store.ts";
-import { quoteForPosixShell } from "../src/remote.ts";
+import { projectsRoots, setExtraConfigDirs } from "../src/store.ts";
 
 /** A HOME holding the default ~/.claude store and a second store beside it. */
 function twoStores(): { home: string; personal: string } {
@@ -45,12 +44,9 @@ function cli(home: string, args: string[], env: Record<string, string> = {}) {
     ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: join(home, "no-codex"), ...env,
   };
   if (!("CLAUDE_CONFIG_DIR" in env)) delete childEnv["CLAUDE_CONFIG_DIR"];
-  return spawnSync(process.execPath, ["dist/cli.js", "--local", "--list", ...args],
+  return spawnSync(process.execPath, ["dist/cli.js", "--list-machines", ...args],
     { encoding: "utf8", env: childEnv });
 }
-
-const resumeLine = (cwd: string, prefix: string, sid: string) =>
-  `cd ${quoteForPosixShell(cwd)} && ${prefix}claude --resume ${quoteForPosixShell(sid)}`;
 
 test("extra config dirs are searched between CLAUDE_CONFIG_DIR and ~/.claude", () => {
   const { home, personal } = twoStores();
@@ -71,66 +67,14 @@ test("extra config dirs are searched between CLAUDE_CONFIG_DIR and ~/.claude", (
   }
 });
 
-test("claudeConfigDir names the store holding a transcript, null for ~/.claude", () => {
-  const { home, personal } = twoStores();
-  try {
-    withEnv({ HOME: home, CLAUDE_CONFIG_DIR: undefined }, () => {
-      setExtraConfigDirs([personal]);
-      assert.equal(claudeConfigDir(join(personal, "projects", "-w-home", "home-sid.jsonl")), personal);
-      assert.equal(claudeConfigDir(join(home, ".claude", "projects", "-w-work", "work-sid.jsonl")), null);
-    });
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("--extra-dir lists both stores and each resume command targets its own store", () => {
-  const { home, personal } = twoStores();
-  try {
-    const out = cli(home, ["--extra-dir", personal]);
-    assert.equal(out.status, 0, out.stderr);
-    assert.ok(out.stdout.includes(
-      resumeLine("/w/home", `CLAUDE_CONFIG_DIR=${quoteForPosixShell(personal)} `, "home-sid")), out.stdout);
-    assert.ok(out.stdout.includes(resumeLine("/w/work", "", "work-sid")), out.stdout);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("without --extra-dir or CLAUDE_CONFIG_DIR only ~/.claude is listed, unchanged", () => {
-  const { home } = twoStores();
-  try {
-    const out = cli(home, []);
-    assert.equal(out.status, 0, out.stderr);
-    assert.ok(out.stdout.includes(resumeLine("/w/work", "", "work-sid")), out.stdout);
-    assert.ok(!out.stdout.includes("/w/home"));
-    assert.ok(!out.stdout.includes("CLAUDE_CONFIG_DIR"));
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("with CLAUDE_CONFIG_DIR set, ~/.claude rows unset it so claude finds them", () => {
-  const { home, personal } = twoStores();
-  try {
-    const out = cli(home, [], { CLAUDE_CONFIG_DIR: personal });
-    assert.equal(out.status, 0, out.stderr);
-    assert.ok(out.stdout.includes(resumeLine("/w/work", "env -u CLAUDE_CONFIG_DIR ", "work-sid")), out.stdout);
-    assert.ok(out.stdout.includes(
-      resumeLine("/w/home", `CLAUDE_CONFIG_DIR=${quoteForPosixShell(personal)} `, "home-sid")), out.stdout);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("--extra-dir without a projects folder warns and still lists the rest", () => {
+test("--extra-dir without a projects folder warns and the command still runs", () => {
   const { home } = twoStores();
   const missing = join(home, "no-such-store");
   try {
     const out = cli(home, ["--extra-dir", missing]);
     assert.equal(out.status, 0, out.stderr);
     assert.ok(out.stderr.includes(`! --extra-dir ${missing}: no projects folder, skipped`), out.stderr);
-    assert.ok(out.stdout.includes(resumeLine("/w/work", "", "work-sid")), out.stdout);
+    assert.ok(out.stdout.includes("this machine"), out.stdout);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
