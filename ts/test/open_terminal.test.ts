@@ -130,6 +130,8 @@ if(!args.includes('-p')){
     } finally {
       w.close();
       spawnSync("tmux", ["-L", socket, "kill-server"]);
+      // tmux leaves the socket file behind when its server is killed.
+      rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid!()}`, socket), { force: true });
       for (const [k, v] of Object.entries(prior))
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;

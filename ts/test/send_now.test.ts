@@ -147,6 +147,8 @@ test(
       assert.throws(() => sendKey(r, "C-c"), /Unknown key/);
     } finally {
       spawnSync("tmux", ["-L", socket, "kill-server"]);
+      // tmux leaves the socket file behind when its server is killed.
+      rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid!()}`, socket), { force: true });
       if (prior === undefined) delete process.env.CFIND_TMUX_BIN;
       else process.env.CFIND_TMUX_BIN = prior;
       rmSync(dir, { recursive: true, force: true });
