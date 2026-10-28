@@ -1747,6 +1747,11 @@ html:has(.drawer.full:not([hidden])) {
   font-size: 12px;
   font-weight: 400;
   white-space: normal;
+  /* The bubble breaks anywhere; in a table that squeezes columns to one letter.
+     Long words make the table scroll sideways instead. */
+  overflow-wrap: normal;
+  vertical-align: top;
+  text-align: left;
 }
 .md-table th {
   font-weight: 600;
