@@ -19,11 +19,7 @@
       title="Sidebar (⌘B)"
     ></button>
     <aside class="sidebar">
-      <div class="sidebar-top">
-        <a class="brand" href="#overview" aria-label="cfind home"
-          ><span class="brand-symbol">c</span><span>cfind</span></a
-        >
-      </div>
+      <div class="sidebar-top"></div>
       <div class="sidebar-actions">
         <button class="nav-item" id="new-agent">
           <span></span> New agent <kbd>⌘N</kbd>
@@ -42,14 +38,10 @@
         <button data-page="sessions" class="nav-item">
           <span>≡</span> Sessions
         </button>
-        <button data-page="usage" class="nav-item">
-          <span>▥</span> Usage & analytics
-        </button>
         <button data-page="machines" class="nav-item">
           <span>▣</span> Machines
         </button>
       </nav>
-      <div class="recents" id="recents"></div>
       <div class="sidebar-bottom">
         <div class="collector-info">
           <i id="collector-dot" class="online-dot"></i
@@ -204,8 +196,8 @@
         <dd>Go to a section</dd>
         <dt><kbd>⌘B</kbd></dt>
         <dd>Hide or show the sidebar</dd>
-        <dt><kbd>⌘⇧F</kbd></dt>
-        <dd>Chat full screen or side panel</dd>
+        <dt class="mac-only"><kbd>⌘⇧F</kbd></dt>
+        <dd class="mac-only">Full screen</dd>
         <dt><kbd>Esc</kbd></dt>
         <dd>Leave full screen, then close</dd>
       </dl>
