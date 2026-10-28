@@ -17,6 +17,7 @@ import { CodexRPC } from "./codex.ts";
 import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 import { startInTmux } from "./live.ts";
+import { askCommand, askReply } from "./asks.ts";
 
 export interface Message {
   id: string;
@@ -63,6 +64,8 @@ export interface Agent {
   error?: string;
   estimatedCostUsd?: number;
   pending?: { id: any; method: string; params: any };
+  /** The turn ended and the agent waits for the user's answer to this. */
+  ask?: string;
 }
 export function newAgent(profile: string, cwd: string, title: string): Agent {
   return {
@@ -124,6 +127,25 @@ function pushTool(
   push(a, "tool", summary.split(/\s+/).join(" ").slice(0, 300), id);
   a.messages[a.messages.length - 1]!.tool = { name, input: clip(text) };
 }
+/** At the end of a turn: the agent's own `cfind ask` call, else its last paragraph. */
+function setAsk(a: Agent) {
+  let start = a.messages.length;
+  while (start > 0 && a.messages[start - 1]!.role !== "user") start--;
+  let ask: string | undefined, reply: string | undefined;
+  for (const m of a.messages.slice(start)) {
+    if (m.role === "assistant" && m.text.trim()) reply = m.text;
+    if (m.role !== "tool" || !m.tool) continue;
+    // Claude's input is JSON with a command; Codex's is the command itself.
+    let command = m.tool.input;
+    try {
+      command = JSON.parse(command).command ?? command;
+    } catch {}
+    if (typeof command === "string") ask = askCommand(command) ?? ask;
+  }
+  ask ??= askReply(reply);
+  if (ask) a.ask = ask;
+  else delete a.ask;
+}
 function toolOutput(a: Agent, id: string, output: string, error = false) {
   const m = a.messages.find((m) => m.id === id);
   if (m?.tool) {
@@ -162,6 +184,7 @@ export function applyCodexEvent(a: Agent, method: string, p: any) {
   }
   if (method === "turn/started") {
     a.state = "running";
+    delete a.ask;
     a.turnId = p.turn?.id;
   }
   if (method === "item/agentMessage/delta") delta(a, p.itemId, p.delta ?? "");
@@ -245,6 +268,7 @@ export function applyCodexEvent(a: Agent, method: string, p: any) {
           ? "stopped"
           : "idle";
     if (p.turn?.error) a.error = p.turn.error.message;
+    if (a.state === "idle") setAsk(a);
   }
   if (method === "error") {
     a.error = p.error?.message ?? p.message ?? "Agent error";
@@ -326,6 +350,7 @@ export function applyClaudeEvent(a: Agent, p: any) {
     )
       push(a, "assistant", p.result);
     delete (a as any).streamId;
+    if (a.state === "idle") setAsk(a);
   }
 }
 
@@ -928,6 +953,7 @@ export class AgentWorkspace {
     this.booting.add(a.id);
     a.state = "running";
     a.error = undefined;
+    delete a.ask;
     const { text: prompt, images = [], skill } = a.queue.shift()!;
     push(a, "user", prompt, undefined, images.length ? images : undefined);
     this.emit();

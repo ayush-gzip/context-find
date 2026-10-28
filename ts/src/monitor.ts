@@ -16,6 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { codexRoots, projectsRoots } from "./store.ts";
 import { stripPasteTags } from "./conversation.ts";
+import { askCommand, askReply, askScript } from "./asks.ts";
 
 export interface Profile {
   id: string;
@@ -65,6 +66,8 @@ export interface ObservedSession {
   tmux?: boolean;
   tokens: Tokens;
   usageAvailable: boolean;
+  /** The turn ended and the agent waits for the user's answer to this. */
+  ask?: string;
 }
 export interface LiveRecord {
   profile: string;
@@ -91,6 +94,10 @@ interface FileState {
   slot: Record<string, string>;
   cumulative: Tokens;
   limits?: Limits;
+  /** Since the user's last message: the question from a `cfind ask` call, and
+   *  the end of the latest reply. */
+  ask?: string;
+  reply?: string;
 }
 export const zero = (): Tokens => ({
   input: 0,
@@ -240,6 +247,46 @@ function freshFile(
     },
   };
 }
+// Enough of the reply for its last paragraph; this is kept in the cache.
+const REPLY = 600;
+function watchAsk(f: FileState, row: any) {
+  if (row.isSidechain) return;
+  const content = row.message?.content,
+    p = row.payload;
+  // Claude: the user's own message starts over; tool results are not one.
+  if (
+    row.type === "user" &&
+    !row.isMeta &&
+    (typeof content === "string" ||
+      (Array.isArray(content) && content.some((c) => c?.type === "text")))
+  )
+    f.ask = f.reply = undefined;
+  if (row.type === "assistant" && Array.isArray(content))
+    for (const c of content) {
+      if (c?.type === "text" && c.text?.trim()) f.reply = c.text.slice(-REPLY);
+      if (c?.type === "tool_use" && typeof c.input?.command === "string")
+        f.ask = askCommand(c.input.command) ?? f.ask;
+    }
+  // Codex: each turn starts with task_started.
+  if (row.type === "event_msg" && p?.type === "task_started")
+    f.ask = f.reply = undefined;
+  if (row.type !== "response_item") return;
+  if (p?.type === "message" && p.role === "assistant" && Array.isArray(p.content)) {
+    const t = p.content
+      .filter((c: any) => c?.type === "output_text")
+      .map((c: any) => c.text ?? "")
+      .join("\n");
+    if (t.trim()) f.reply = t.slice(-REPLY);
+  }
+  if (p?.type === "custom_tool_call" && typeof p.input === "string")
+    f.ask = askScript(p.input) ?? f.ask;
+  if (p?.type === "function_call" && typeof p.arguments === "string")
+    try {
+      const a = JSON.parse(p.arguments),
+        cmd = a.cmd ?? a.command;
+      f.ask = askCommand(Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? "")) ?? f.ask;
+    } catch {}
+}
 function consume(f: FileState, row: any, mtime: number) {
   if (!object(row)) return;
   const s = f.session,
@@ -277,6 +324,7 @@ function consume(f: FileState, row: any, mtime: number) {
       s.state = "idle";
     if (p?.type === "turn_aborted") s.state = "stopped";
   }
+  watchAsk(f, row);
   let tokens: Tokens | undefined, id: string | undefined;
   if (
     s.source === "claude" &&
@@ -716,6 +764,12 @@ export class Monitor {
       s.open = true;
       s.tmux = !!live.tmux || undefined;
       s.updatedAt = Math.max(s.updatedAt, live.updatedAt);
+    }
+    // Once the turn has ended: the agent's own `cfind ask`, else its last paragraph.
+    for (const s of sessions) {
+      const f = this.cache[s.path],
+        ask = s.state === "idle" ? (f?.ask ?? askReply(f?.reply)) : undefined;
+      if (ask) s.ask = ask;
     }
     return {
       updatedAt: this.updatedAt,

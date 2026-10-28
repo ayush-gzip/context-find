@@ -39,6 +39,7 @@ search, read and talk to them.
 
   cfind                                    start the dashboard service
   cfind daemon [start|stop|status|install]  manage the dashboard service
+  cfind ask "QUESTION"                     for agents: mark this chat as waiting for your answer
 
   --onboard-external  add a machine to ~/.context-find/hosts, interactively
   --list-machines     show every machine this can index, and what it holds
@@ -193,6 +194,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       help: { type: "boolean", short: "h", default: false },
     },
   });
+
+  // An agent runs this as its last step when it needs the user. The dashboard
+  // finds the call in the transcript, so there is nothing to do here.
+  if (positionals[0] === "ask") {
+    printTerminalText("cfind: this chat now shows as waiting for your answer.");
+    return 0;
+  }
 
   if (values.debug) {
     process.env["CONTEXT_FIND_DEBUG"] = "1";

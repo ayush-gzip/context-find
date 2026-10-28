@@ -94,6 +94,7 @@ const state = (s) =>
     running: "Running",
     queued: "Queued",
     waiting: "Needs input",
+    asking: "Needs your answer",
     failed: "Failed",
     complete: "Complete",
     completed: "Complete",
@@ -331,9 +332,12 @@ function chart() {
 const recentFirst = (a, b) =>
   (b.updatedAt || b.startedAt || 0) - (a.updatedAt || a.startedAt || 0) ||
   `${a.profile || ""}|${a.id}`.localeCompare(`${b.profile || ""}|${b.id}`);
+/** A turn that ended on a question (`cfind ask`, or the reply asks) shows as its own state. */
+const shownState = (x) => (x.ask && x.state === "idle" ? "asking" : x.state);
 function allAgents() {
   const owned = S.workspace.agents.map((a) => ({
       ...a,
+      state: shownState(a),
       owned: true,
       children: [...a.children].sort(recentFirst),
     })),
@@ -343,10 +347,14 @@ function allAgents() {
       (s) =>
         !s.parent &&
         !ids.has(s.profile + "|" + s.id) &&
-        (s.open || ["running", "waiting", "stale"].includes(s.state)),
+        (s.open ||
+          ["running", "waiting", "stale"].includes(s.state) ||
+          // A closed session that asked today still waits for an answer.
+          (s.ask && Date.now() - s.updatedAt < 24 * 3600 * 1000)),
     )
     .map((s) => ({
       ...s,
+      state: shownState(s),
       sid: s.id,
       owned: false,
       // An idle session's old subagents are done unless they still report.
@@ -381,7 +389,7 @@ function agentCard(a) {
 }
 function activeCanvas() {
   const agents = allAgents().filter((a) =>
-    ["running", "waiting", "queued", "stale"].includes(a.state),
+    ["running", "waiting", "asking", "queued", "stale"].includes(a.state),
   );
   return `<div class="section-heading"><h2>Active agents <span class="count">${agents.length}</span></h2><span class="section-sub">Including subagents</span></div><div class="canvas">${agents.length ? `<div class="agent-grid">${agents.map(agentCard).join("")}</div>` : empty("No agents running", "Start a new agent to see its progress here.", true)}</div>`;
 }
@@ -450,10 +458,12 @@ function workspace() {
       .map(([id, label]) => {
         const group = agents.filter((a) =>
           id === "done"
-            ? !["queued", "running", "waiting", "stale"].includes(a.state)
+            ? !["queued", "running", "waiting", "asking", "stale"].includes(a.state)
             : id === "running"
               ? ["running", "stale"].includes(a.state)
-              : a.state === id,
+              : id === "waiting"
+                ? ["waiting", "asking"].includes(a.state)
+                : a.state === id,
         );
         return `<section class="lane"><div class="lane-title"><span>${label}</span><span>${group.length}</span></div>${group.length ? group.map(agentCard).join("") : '<div class="lane-empty">No agents here</div>'}</section>`;
       })
@@ -1335,7 +1345,7 @@ function renderChat() {
   if (S.view.kind === "agent" && !a) return closeDrawer();
   const drawer = $("#drawer"),
     list = $("#chat-list"),
-    state0 = a ? a.state : s.state || "idle",
+    state0 = shownState(a || { ...s, state: s.state || "idle" }),
     label = profileLabel(a ? a.profile : s.profile || s.source);
   $("#chat-title").textContent =
     (a ? a.title : s.title || s.summary) || "Conversation";

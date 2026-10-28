@@ -956,7 +956,8 @@ main {
   background: var(--green);
   animation: breathe 2s infinite;
 }
-.state-dot.waiting {
+.state-dot.waiting,
+.state-dot.asking {
   background: #e6a23c;
 }
 .state-dot.failed {
