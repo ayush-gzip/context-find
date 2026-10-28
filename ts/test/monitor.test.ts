@@ -112,7 +112,7 @@ test("version 2 metrics are rebuilt from transcripts to correct synthetic model 
     await restarted.refresh();
     assert.equal(restarted.snapshot().sessions[0]!.model, "opus");
     assert.equal(restarted.snapshot().profiles[0]!.tokens.output, 3);
-    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 3);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 4);
   } finally {
     rmSync(f.home, { recursive: true, force: true });
   }
