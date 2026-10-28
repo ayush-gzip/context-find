@@ -326,8 +326,15 @@ function chart() {
       "",
     )}</div><div class="chart-labels"><span>${days[0]?.slice(5)}</span><span>${days[Math.floor(days.length / 2)]?.slice(5)}</span><span>Today</span></div></div><div class="chart-caption">Local calendar days · Counts come from recorded usage, not billing.</div></div>`;
 }
+const recentFirst = (a, b) =>
+  (b.updatedAt || b.startedAt || 0) - (a.updatedAt || a.startedAt || 0) ||
+  `${a.profile || ""}|${a.id}`.localeCompare(`${b.profile || ""}|${b.id}`);
 function allAgents() {
-  const owned = S.workspace.agents.map((a) => ({ ...a, owned: true })),
+  const owned = S.workspace.agents.map((a) => ({
+      ...a,
+      owned: true,
+      children: [...a.children].sort(recentFirst),
+    })),
     ids = new Set(owned.map((a) => a.profile + "|" + a.sid));
   const observed = (S.metrics?.sessions || [])
     .filter(
@@ -354,9 +361,12 @@ function allAgents() {
           state: c.state,
           model: c.model,
           updatedAt: c.updatedAt,
-        })),
+        }))
+        .sort(recentFirst),
     }));
-  return [...owned, ...observed].filter((a) => inScope(a.profile));
+  return [...owned, ...observed]
+    .filter((a) => inScope(a.profile))
+    .sort(recentFirst);
 }
 function kids(children) {
   const live = children.filter((c) =>
@@ -465,7 +475,7 @@ function sessions() {
     );
   return (
     heading("", "Sessions", "Every conversation, ready when you need it.") +
-    `<form id="session-search" class="filters"><div class="searchbox"><span>⌕</span><input id="session-q" placeholder="Search conversations…" value="${esc(S.search)}" aria-label="Search conversations" autocomplete="off"></div><select data-project aria-label="Project"><option value="all">All projects</option>${[
+    `<form id="session-search" class="filters"><div class="searchbox"><span>⌕</span><input id="session-q" placeholder="Search conversations…" value="${esc(S.search)}" aria-label="Search conversations" autocomplete="off"></div><select data-profile aria-label="Profile">${sourceOptions()}</select><select data-project aria-label="Project"><option value="all">All projects</option>${[
       ...new Set((S.metrics?.sessions || []).map((s) => s.cwd).filter(Boolean)),
     ]
       .sort()
@@ -613,12 +623,26 @@ function render() {
   const f = document.activeElement;
   if (f && $("#main").contains(f) && ["INPUT", "TEXTAREA"].includes(f.tagName))
     return;
-  const scroll = window.scrollY;
-  $("#main").innerHTML =
+  const scroll = window.scrollY,
+    main = $("#main"),
+    board = $(".board", main),
+    left = board?.scrollLeft,
+    html =
     (S.metrics.errors.length
       ? `<div class="warning-banner">Collection warning: ${S.metrics.errors.map(esc).join(" · ")}</div>`
       : "") +
     ({ overview, workspace, sessions, settings }[S.page] || overview)();
+  if (S.page === "workspace" && board) {
+    const next = document.createElement("template");
+    next.innerHTML = html;
+    // Keep the scroll container connected while a trackpad gesture is active.
+    board.innerHTML = $(".board", next.content).innerHTML;
+    board.scrollLeft = left;
+    $(".page-heading", main).replaceWith($(".page-heading", next.content));
+    $(".warning-banner", main)?.remove();
+    const warning = $(".warning-banner", next.content);
+    if (warning) main.prepend(warning);
+  } else main.innerHTML = html;
   window.scrollTo(0, scroll);
 }
 /** `fromHistory`: back or forward already chose the page and the chat. */
@@ -772,6 +796,32 @@ function openView(view) {
   renderAttachments();
   renderChat();
   if (!watchChat()) void loadHistory();
+  void connectCodex();
+}
+async function connectCodex() {
+  const chat = S.chat, a = viewAgent(), s = S.view?.kind === "session" ? S.view.s : null;
+  const profile = a?.profile || s?.profile;
+  const source = S.metrics?.profiles.find(p => p.id === profile)?.source;
+  const sid = a?.sid || s?.id;
+  if (source !== "codex" || !sid || s?.host || s?.parent) return;
+  chat.connecting = true;
+  renderChat();
+  try {
+    const connected = await api("agent", { action: "attach", profile, sid });
+    if (S.chat !== chat) return;
+    const existing = S.workspace.agents.find(x => x.id === connected.id);
+    if (!existing) S.workspace.agents.unshift(connected);
+    S.view = { kind: "agent", id: connected.id };
+    chat.key = viewKey();
+    chat.connectError = "";
+    tellApp();
+    watchChat();
+  } catch (error) {
+    if (S.chat !== chat) return;
+    chat.connectError = error.message;
+  } finally {
+    if (S.chat === chat) { chat.connecting = false; renderChat(); }
+  }
 }
 /** A local transcript pushes its new messages while its chat is open. Returns
  *  false for chats that load another way (remote sessions, dashboard agents). */
@@ -884,16 +934,16 @@ function chatItems(a, s) {
       key: "lines",
       html: `<div class="reader-lines">${chat.lines.map(([style, line]) => `<div class="reader-line ${esc(style)}">${esc(line) || " "}</div>`).join("")}</div>`,
     });
-  const history = a
+  const history = a && !a.external
     ? chat.history.filter((m) => !m.time || m.time < a.startedAt)
     : chat.history;
   for (const m of history) items.push(messageItem("h:" + m.id, m, label));
-  if (a && history.length)
+  if (a && !a.external && history.length)
     items.push({
       key: "continued",
       html: `<div class="chat-note">Continued in the dashboard · ${esc(clock(a.startedAt))}</div>`,
     });
-  for (const m of a?.messages || [])
+  for (const m of (a?.messages || []).filter(m => !a.external || m.role === "note"))
     items.push(messageItem("m:" + m.id, m, label));
   if (a?.state === "running" || a?.state === "queued")
     items.push({
@@ -1158,6 +1208,8 @@ function readyAnswers() {
 }
 function composerState(a, s) {
   const label = a ? agentName(a.profile) : profileLabel(s.profile || s.source);
+  if (S.chat?.connecting || S.chat?.connectError)
+    return { enabled: false, placeholder: S.chat.connecting ? "Connecting to Codex…" : "Codex connection unavailable", hint: S.chat.connectError || "Connecting to this session's controls" };
   if (a) {
     const decline =
       a.pending?.method === "can_use_tool" &&
@@ -1886,16 +1938,14 @@ function slashMenu() {
     found = !Array.isArray(all)
       ? []
       : q.includes(" ")
-        ? !live && all.some((x) => x.name === "model")
-          ? MODELS.filter((x) => rank(x.name) === 0)
-          : []
+        ? (agentName(c.profile) === "Claude" && !live && q.startsWith("model ")
+            ? MODELS : all).filter(x => x.name.includes(" ") && rank(x.name) === 0)
         : all
             .filter((x) => (live || !x.terminal) && rank(x.name) < 3)
             .sort(
               (x, y) =>
                 rank(x.name) - rank(y.name) || x.name.localeCompare(y.name),
             );
-  // Codex chats get no commands, so no menu.
   if (Array.isArray(all) && !found.length) return (m.hidden = true);
   if (m.dataset.q !== q) {
     m.dataset.q = q;
@@ -1942,7 +1992,7 @@ function slashKey(e) {
 }
 function pickSlash(name) {
   const t = $("#agent-prompt");
-  if (name.startsWith("model ")) {
+  if (name.startsWith("model ") || name.startsWith("effort ")) {
     t.value = "/" + name;
     $("#slash-menu").hidden = true;
     return $("#agent-form").requestSubmit();

@@ -158,6 +158,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   turn++;
   if(turn===1){
    send({type:'system',subtype:'init',session_id:'sid1',model:'haiku'});
+   text('MODE='+args[args.indexOf('--permission-mode')+1]);
    if(!stdio){send({type:'result',subtype:'error',is_error:true,result:'no prompt tool'});return;}
    send({type:'assistant',message:{id:'a1',content:[{type:'tool_use',id:'q',name:'AskUserQuestion',input:{questions:[{question:'Tea or coffee?'}]}}]}});
    setTimeout(()=>send({type:'control_request',request_id:'r1',request:{subtype:'can_use_tool',tool_name:'AskUserQuestion',input:{questions:[{question:'Tea or coffee?',header:'Drink',options:[{label:'Tea'},{label:'Coffee'}],multiSelect:false}]}}}),150);
@@ -200,7 +201,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   try {
     const a = await w.create("claude", dir, "first");
     await until(() => a.state === "running" && a.sid === "sid1");
+    a.updatedAt = 1;
     await w.send(a.id, "later");
+    assert.ok(a.updatedAt > 1, "queued input updates interaction time");
     await w.send(a.id, "drop");
     w.unqueue(a.id, 1);
     assert.deepEqual(
@@ -214,12 +217,15 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       answers: { "Tea or coffee?": ["Coffee"] },
     });
     await until(() => a.pending?.params.tool_name === "Write");
+    a.updatedAt = 1;
     await w.respond(a.id, { allow: true, always: true });
+    assert.ok(a.updatedAt > 1, "approval answers update interaction time");
     await until(
       () =>
         a.state === "idle" && a.messages.some((m) => m.text === "LATER:later"),
     );
     const texts = a.messages.map((m) => m.text);
+    assert.ok(texts.includes("MODE=auto"));
     assert.ok(texts.includes("ANSWER=Coffee"));
     assert.ok(texts.includes("WRITE=allow:session"));
     assert.equal(
@@ -230,6 +236,41 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       a.messages.filter((m) => m.role === "user").map((m) => m.text),
       ["first", "Coffee", "later"],
     );
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;
+    else process.env.CFIND_CLAUDE_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("saved legacy agents and resumed sessions retain manual permissions", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-legacy-mode-")),
+    binary = join(dir, "claude"),
+    prior = process.env.CFIND_CLAUDE_BIN;
+  writeFileSync(binary, `#!/usr/bin/env node
+const args=process.argv.slice(2);
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ if(JSON.parse(line).type!=='user')return;
+ console.log(JSON.stringify({type:'system',subtype:'init',session_id:'legacy',model:args[args.indexOf('--permission-mode')+1]}));
+ console.log(JSON.stringify({type:'result',subtype:'success',result:'done'}));
+});`, { mode: 0o700 });
+  const legacy = newAgent("claude", dir, "saved");
+  delete legacy.permissionMode;
+  const data = join(dir, "data");
+  mkdirSync(data);
+  writeFileSync(join(data, "workspace.json"), JSON.stringify([legacy]));
+  process.env.CFIND_CLAUDE_BIN = binary;
+  const w = new AgentWorkspace([{id:"claude",source:"claude",label:"Claude",path:dir}], data);
+  try {
+    await w.send(legacy.id, "continue");
+    const resumed = await w.create("claude", dir, "resume", "old-session");
+    const deadline = Date.now() + 4000;
+    while (w.snapshot().agents.some(a => a.state !== "idle")) {
+      if (Date.now() > deadline) throw new Error("Agent start timed out");
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.equal(w.snapshot().agents.find(a => a.id === legacy.id)!.model, "manual");
+    assert.equal(resumed.model, "manual");
   } finally {
     w.close();
     if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;

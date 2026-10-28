@@ -11,6 +11,34 @@ export interface SlashCommand {
   hint?: string;
   /** Works only in an interactive terminal, not in a dashboard agent. */
   terminal?: boolean;
+  skillPath?: string;
+}
+
+/** Codex exposes controls through RPC, rather than interpreting TUI slash text. */
+export async function codexCommands(rpc: { call: (method: string, params?: any) => Promise<any> }, cwd: string): Promise<SlashCommand[]> {
+  const models: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await rpc.call("model/list", { limit: 100, ...(cursor ? { cursor } : {}) });
+    models.push(...page.data);
+    cursor = page.nextCursor || undefined;
+  } while (cursor);
+  const skills = await rpc.call("skills/list", { cwds: [cwd] });
+  const efforts = new Set<string>(models.flatMap(m => (m.supportedReasoningEfforts || []).map((e: any) => e.reasoningEffort)));
+  return [
+    { name: "model", description: "Choose a model", hint: "name" },
+    ...models.filter(m => !m.hidden).map(m => ({ name: `model ${m.model}`, description: m.displayName || m.model })),
+    { name: "effort", description: "Set reasoning effort", hint: "level" },
+    ...[...efforts].map(e => ({ name: `effort ${e}`, description: `Use ${e} reasoning effort` })),
+    { name: "compact", description: "Compact this conversation" },
+    { name: "status", description: "Show this session's model and state" },
+    { name: "rename", description: "Rename this conversation", hint: "title" },
+    { name: "stop", description: "Stop the current reply" },
+    { name: "skills", description: "List available skills" },
+    ...skills.data.flatMap((entry: any) => (entry.skills || [])
+      .filter((s: any) => s.enabled && !["model", "effort", "compact", "status", "rename", "stop", "skills"].includes(s.name))
+      .map((s: any) => ({ name: s.name, description: s.shortDescription || s.description, skillPath: s.path }))),
+  ];
 }
 
 // Claude's own commands have no file to read a description from.

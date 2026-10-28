@@ -285,6 +285,7 @@ function consume(f: FileState, row: any, mtime: number) {
   ) {
     const m = row.message,
       u = m.usage;
+    if (m.model === "<synthetic>") return;
     if (typeof m.model === "string") s.model = m.model;
     const next: Tokens = {
       input: count(u.input_tokens),
@@ -356,7 +357,7 @@ export class Monitor {
       const saved = JSON.parse(
         readFileSync(join(this.dataDir, "metrics.json"), "utf8"),
       );
-      if (saved.version === 2) this.cache = saved.files;
+      if (saved.version === 3) this.cache = saved.files;
     } catch {}
   }
   subscribe(fn: () => void) {
@@ -481,7 +482,7 @@ export class Monitor {
       const path = join(this.dataDir, "metrics.json");
       writeFileSync(
         path + ".tmp",
-        JSON.stringify({ version: 2, files: this.cache }),
+        JSON.stringify({ version: 3, files: this.cache }),
         { mode: 0o600 },
       );
       renameSync(path + ".tmp", path);

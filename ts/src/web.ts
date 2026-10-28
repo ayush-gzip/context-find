@@ -561,6 +561,17 @@ export function createWebServer(
               json(res, 200, value);
             };
             const images = uploadIds(data.images);
+            if (data.action === "attach") {
+              const session = monitor.snapshot().sessions.find(
+                s => s.id === data.sid && s.profile === data.profile && s.source === "codex" && !s.parent,
+              );
+              if (!session) throw new Error("Unknown local Codex session");
+              if (codexHolder(session.path) === "other")
+                throw new Error("This Codex session uses a separate server. Open it with the shared Codex server to connect here.");
+              ok(await workspace.attach(session.profile, session.cwd, session.id,
+                session.path, session.title, session.updatedAt, session.startedAt));
+              return;
+            }
             const said = (v: unknown) =>
               typeof v === "string" && (!!v.trim() || images.length > 0);
             if (data.action === "create") {

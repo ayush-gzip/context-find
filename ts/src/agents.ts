@@ -12,7 +12,9 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { monitorDir, type Profile } from "./monitor.ts";
-import { claudeCommands } from "./commands.ts";
+import { claudeCommands, codexCommands } from "./commands.ts";
+import { CodexRPC } from "./codex.ts";
+import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 
 export interface Message {
@@ -27,6 +29,7 @@ export interface Message {
 export interface QueueItem {
   text: string;
   images?: string[];
+  skill?: { name: string; path: string };
 }
 export interface Child {
   id: string;
@@ -46,6 +49,10 @@ export interface Agent {
   model?: string;
   /** Set with `/model`; Claude starts with it again after a restart. */
   pickedModel?: string;
+  permissionMode?: "auto" | "manual";
+  /** A session that cfind joined on the shared server. Its transcript remains primary. */
+  external?: boolean;
+  effort?: string;
   state: string;
   startedAt: number;
   updatedAt: number;
@@ -62,6 +69,7 @@ export function newAgent(profile: string, cwd: string, title: string): Agent {
     profile,
     cwd,
     title: title.slice(0, 100),
+    permissionMode: "auto",
     state: "queued",
     startedAt: Date.now(),
     updatedAt: Date.now(),
@@ -122,6 +130,15 @@ function delta(a: Agent, id: string, text: string) {
 }
 export function applyCodexEvent(a: Agent, method: string, p: any) {
   a.updatedAt = Date.now();
+  if (method === "thread/status/changed") {
+    a.state = p.status?.type === "active"
+      ? p.status.activeFlags?.length ? "waiting" : "running"
+      : p.status?.type === "idle" ? "idle" : "stopped";
+  }
+  if (method === "thread/settings/updated") {
+    if (p.settings?.model) a.model = p.settings.model;
+    if (p.settings?.effort) a.effort = p.settings.effort;
+  }
   if (method === "turn/started") {
     a.state = "running";
     a.turnId = p.turn?.id;
@@ -286,97 +303,13 @@ export function applyClaudeEvent(a: Agent, p: any) {
   }
 }
 
-class CodexRPC {
-  child: ChildProcessWithoutNullStreams;
-  private next = 0;
-  private pending = new Map<
-    number,
-    {
-      resolve: (v: any) => void;
-      reject: (e: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  >();
-  ready: Promise<any>;
-  constructor(private event: (m: string, p: any, id?: any) => void) {
-    this.child = spawn(
-      process.env["CFIND_CODEX_BIN"] ?? "codex",
-      ["app-server", "--listen", "stdio://"],
-      { env: process.env },
-    );
-    const lines = createInterface({ input: this.child.stdout });
-    lines.on("line", (line) => {
-      try {
-        const m = JSON.parse(line);
-        if (m.id != null && !m.method) {
-          const p = this.pending.get(m.id);
-          if (p) {
-            clearTimeout(p.timer);
-            this.pending.delete(m.id);
-            m.error
-              ? p.reject(new Error(m.error.message))
-              : p.resolve(m.result);
-          }
-        } else if (m.method) this.event(m.method, m.params ?? {}, m.id);
-      } catch {}
-    });
-    this.child.stderr.on("data", () => {});
-    this.child.on("error", (e) => this.fail(e));
-    this.child.on("exit", () =>
-      this.fail(new Error("Codex connection closed")),
-    );
-    this.ready = this.call("initialize", {
-      clientInfo: {
-        name: "context_find",
-        title: "Context Find",
-        version: "0.2.0",
-      },
-      capabilities: { experimentalApi: true },
-    }).then(() =>
-      this.child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n"),
-    );
-    this.ready.catch(() => {});
-  }
-  private fail(e: Error) {
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(e);
-    }
-    this.pending.clear();
-    this.event("connection/closed", { message: e.message });
-  }
-  call(method: string, params: any = {}): Promise<any> {
-    const id = ++this.next;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`${method} timed out`));
-      }, 30000);
-      this.pending.set(id, { resolve, reject, timer });
-      this.child.stdin.write(
-        JSON.stringify({ id, method, params }) + "\n",
-        (e) => {
-          if (e) {
-            clearTimeout(timer);
-            this.pending.delete(id);
-            reject(e);
-          }
-        },
-      );
-    });
-  }
-  respond(id: any, result: any) {
-    this.child.stdin.write(JSON.stringify({ id, result }) + "\n");
-  }
-  close() {
-    this.child.kill();
-  }
-}
-
 export class AgentWorkspace {
   private agents: Agent[] = [];
   private listeners = new Set<() => void>();
   private codex?: CodexRPC;
+  private joined = new Set<string>();
+  private joining = new Map<string, Promise<void>>();
+  private codexRequests = new Map<string, NonNullable<Agent["pending"]>[]>();
   private claude = new Map<string, ChildProcessWithoutNullStreams>();
   private logins = new Map<
     string,
@@ -436,13 +369,18 @@ export class AgentWorkspace {
   private rpc() {
     if (!this.codex)
       this.codex = new CodexRPC((m, p, id) => {
+        if (this.closed) return;
         if (m === "connection/closed") {
+          this.joined.clear();
+          this.joining.clear();
+          this.codexRequests.clear();
           for (const a of this.agents.filter(
             (a) =>
               a.profile === "codex" && ["running", "waiting"].includes(a.state),
           )) {
             a.state = "failed";
             a.error = p.message;
+            a.pending = undefined;
           }
           this.codex = undefined;
           this.emit();
@@ -453,15 +391,80 @@ export class AgentWorkspace {
         );
         if (!a) return;
         if (id != null) {
-          a.pending = { id, method: m, params: p };
+          if (m === "mcpServer/elicitation/request" && p.requestedSchema)
+            p.formFields = formFields(p.requestedSchema);
+          const requests = this.codexRequests.get(a.id) || [];
+          if (!requests.some(r => r.id === id)) requests.push({ id, method: m, params: p });
+          this.codexRequests.set(a.id, requests);
+          a.pending = requests[0];
           a.state = "waiting";
+        } else if (m === "serverRequest/resolved") {
+          this.resolveCodexRequest(a, p.requestId);
         } else {
           applyCodexEvent(a, m, p);
-          if (m === "turn/completed") void this.next(a);
+          if (m === "turn/completed") {
+            this.codexRequests.delete(a.id);
+            void this.next(a);
+          }
         }
         this.emit();
       });
     return this.codex;
+  }
+  private resolveCodexRequest(a: Agent, id: any) {
+    const requests = (this.codexRequests.get(a.id) || []).filter(r => r.id !== id);
+    this.codexRequests.set(a.id, requests);
+    a.pending = requests[0];
+    if (!a.pending && a.state === "waiting") a.state = "running";
+  }
+  private async joinCodex(a: Agent) {
+    if (!a.sid || this.joined.has(a.id)) return;
+    const pending = this.joining.get(a.id);
+    if (pending) return pending;
+    const work = (async () => {
+      const rpc = this.rpc();
+      await rpc.ready;
+      // Omitted settings preserve the running session's permissions and model.
+      const r = await rpc.call("thread/resume", { threadId: a.sid, excludeTurns: true });
+      a.model = r.model;
+      a.effort = r.reasoningEffort;
+      if (r.thread.recencyAt || r.thread.updatedAt)
+        a.updatedAt = (r.thread.recencyAt || r.thread.updatedAt) * 1000;
+      const status = r.thread.status;
+      a.state = a.pending ? "waiting" : status?.type === "active"
+        ? status.activeFlags?.length ? "waiting" : "running" : "idle";
+      a.turnId = r.thread.turns?.find((t: any) => t.status === "inProgress")?.id;
+      if (status?.type === "active" && !a.turnId) {
+        const turns = await rpc.call("thread/turns/list", { threadId: a.sid, limit: 1, sortDirection: "desc", itemsView: "none" });
+        a.turnId = turns.data?.find((t: any) => t.status === "inProgress")?.id;
+      }
+      a.error = undefined;
+      this.joined.add(a.id);
+      this.emit();
+    })();
+    this.joining.set(a.id, work);
+    try { await work; } finally { this.joining.delete(a.id); }
+  }
+  async attach(profile: string, cwd: string, sid: string, history: string,
+    title = "Codex session", updatedAt = Date.now(), startedAt = Date.now()) {
+    if (this.profile(profile).source !== "codex") throw new Error("Only Codex uses shared sessions");
+    let a = this.agents.find(a => a.profile === profile && a.sid === sid);
+    const added = !a;
+    if (!a) {
+      a = newAgent(profile, cwd, title);
+      a.updatedAt = updatedAt;
+      a.startedAt = startedAt;
+      a.sid = sid;
+      a.history = history;
+      a.external = true;
+      this.agents.unshift(a);
+    }
+    try { await this.joinCodex(a); }
+    catch (error) {
+      if (added) this.agents = this.agents.filter(x => x !== a);
+      throw error;
+    }
+    return a;
   }
   private profile(id: string) {
     const profile = this.profiles.find((p) => p.id === id);
@@ -482,12 +485,13 @@ export class AgentWorkspace {
     }
     return env;
   }
-  /** The / menu for a profile. Codex gets none: its app server does not run them. */
+  /** Commands are discovered separately for each tool and project. */
   async commands(profile: string, cwd: string) {
     const p = this.profile(profile);
-    return p.source === "claude"
-      ? claudeCommands(this.env(profile), dirname(p.path), cwd)
-      : [];
+    if (p.source === "claude") return claudeCommands(this.env(profile), dirname(p.path), cwd);
+    const rpc = this.rpc();
+    await rpc.ready;
+    return codexCommands(rpc, cwd);
   }
   async accounts() {
     return Promise.all(
@@ -607,6 +611,7 @@ export class AgentWorkspace {
       throw new Error("This session is already in the workspace");
     const a = newAgent(profile, folder, prompt);
     a.sid = sid;
+    if (sid) a.permissionMode = "manual";
     a.history = history;
     a.queue.push({ text: prompt, images });
     this.agents.unshift(a);
@@ -616,16 +621,60 @@ export class AgentWorkspace {
   }
   async send(id: string, prompt: string, images: string[] = []) {
     const a = this.get(id);
+    let queued: QueueItem = { text: prompt, images };
+    if (this.profile(a.profile).source === "codex" && prompt.trim().startsWith("/")) {
+      if (images.length) throw new Error("Send commands without image attachments");
+      const item = await this.codexCommand(a, prompt.trim());
+      if (!item) return a;
+      queued = item;
+    }
     const model = /^\/model\s+(\S+)$/.exec(prompt.trim())?.[1];
     if (model && !images.length && this.profile(a.profile).source !== "codex") {
       this.setModel(a, model);
       return a;
     }
     if (a.queue.length >= 20) throw new Error("Agent queue is full");
-    a.queue.push({ text: prompt, images });
+    a.updatedAt = Date.now();
+    a.queue.push(queued);
     if (!["running", "waiting"].includes(a.state)) void this.next(a);
     this.emit();
     return a;
+  }
+  private async codexCommand(a: Agent, prompt: string): Promise<QueueItem | undefined> {
+    const [, name = "", argument = ""] = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(prompt) || [];
+    const commands = await this.commands(a.profile, a.cwd);
+    const command = commands.find(c => c.name === name);
+    if (!command) throw new Error(`Unsupported Codex command /${name}. Use / to see available commands.`);
+    if (command.skillPath) return { text: argument.trim(), skill: { name, path: command.skillPath } };
+    if (!a.sid) throw new Error("Codex is still starting. Try this command again.");
+    await this.joinCodex(a);
+    const rpc = this.rpc(), arg = argument.trim();
+    if (name === "model" || name === "effort") {
+      if (!arg) {
+        push(a, "note", commands.filter(c => c.name.startsWith(name + " ")).map(c => "/" + c.name).join("\n"));
+      } else {
+        if (!commands.some(c => c.name === `${name} ${arg}`)) throw new Error(`Unknown ${name}: ${arg}`);
+        await rpc.call("thread/settings/update", { threadId: a.sid, [name === "model" ? "model" : "effort"]: arg });
+        if (name === "model") a.model = arg;
+        else a.effort = arg;
+        push(a, "note", `${name === "model" ? "Model" : "Reasoning effort"} set to ${arg}`);
+      }
+    } else if (name === "compact") {
+      await rpc.call("thread/compact/start", { threadId: a.sid });
+      push(a, "note", "Compacting this conversation");
+    } else if (name === "rename") {
+      if (!arg) throw new Error("Use /rename followed by the conversation title");
+      await rpc.call("thread/name/set", { threadId: a.sid, name: arg });
+      a.title = arg.slice(0, 100);
+    } else if (name === "stop") {
+      await this.cancel(a.id);
+    } else if (name === "status") {
+      push(a, "note", `Model: ${a.model || "Default"}\nReasoning: ${a.effort || "Default"}\nState: ${a.state}\nProject: ${a.cwd}`);
+    } else if (name === "skills") {
+      push(a, "note", commands.filter(c => c.skillPath).map(c => `/${c.name} — ${c.description || ""}`).join("\n") || "No skills available in this project");
+    }
+    a.updatedAt = Date.now();
+    this.emit();
   }
   /** Claude's control request changes this agent only. Typed in a terminal,
    *  /model would also save it as the default for new sessions. */
@@ -670,7 +719,7 @@ export class AgentWorkspace {
     this.booting.add(a.id);
     a.state = "running";
     a.error = undefined;
-    const { text: prompt, images = [] } = a.queue.shift()!;
+    const { text: prompt, images = [], skill } = a.queue.shift()!;
     push(a, "user", prompt, undefined, images.length ? images : undefined);
     this.emit();
     try {
@@ -686,17 +735,14 @@ export class AgentWorkspace {
           });
           a.sid = r.thread.id;
           a.model = r.model;
+          this.joined.add(a.id);
         } else
-          await rpc.call("thread/resume", {
-            threadId: a.sid,
-            cwd: a.cwd,
-            approvalPolicy: "on-request",
-            approvalsReviewer: "user",
-            sandbox: "workspace-write",
-          });
+          await this.joinCodex(a);
+        a.state = "running";
         const r = await rpc.call("turn/start", {
           threadId: a.sid,
           input: [
+            ...(skill ? [{ type: "skill", ...skill }] : []),
             ...(prompt.trim()
               ? [{ type: "text", text: prompt, text_elements: [] }]
               : []),
@@ -719,7 +765,7 @@ export class AgentWorkspace {
             "--verbose",
             "--include-partial-messages",
             "--permission-mode",
-            "manual",
+            a.permissionMode ?? "manual",
             // Without a prompt tool, print mode denies every tool that needs approval.
             "--permission-prompt-tool",
             "stdio",
@@ -820,9 +866,17 @@ export class AgentWorkspace {
     const a = this.get(id),
       p = a.pending;
     if (!p) throw new Error("No pending request");
+    if (answer.requestId != null && String(answer.requestId) !== String(p.id))
+      throw new Error("This request changed or expired. Answer the current request.");
     // answer.answers maps a question key to the chosen labels or typed text.
     const answers: Record<string, string[]> = answer.answers ?? {};
     if (this.profile(a.profile).source === "codex") {
+      const decision = answer.decision ?? (!answer.allow ? "decline" : answer.always ? "acceptForSession" : "accept");
+      if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval"].includes(p.method)) {
+        const allowed = p.params.availableDecisions || ["accept", "acceptForSession", "decline", "cancel"];
+        if (!allowed.some((d: any) => JSON.stringify(d) === JSON.stringify(decision)))
+          throw new Error("This approval option is no longer available");
+      }
       const result =
         p.method === "item/tool/requestUserInput"
           ? {
@@ -833,21 +887,20 @@ export class AgentWorkspace {
           : p.method === "item/permissions/requestApproval"
             ? {
                 permissions: answer.allow ? p.params.permissions : {},
-                scope: "turn",
+                scope: answer.always ? "session" : "turn",
               }
             : p.method === "mcpServer/elicitation/request"
               ? {
-                  action: answer.allow ? "accept" : "decline",
-                  content: answer.content ?? null,
+                  action: answer.cancel ? "cancel" : answer.allow ? "accept" : "decline",
+                  content: answer.allow && p.params.requestedSchema
+                    ? formContent(p.params.requestedSchema, answer.content)
+                    : null,
                 }
               : {
-                  decision: !answer.allow
-                    ? "decline"
-                    : answer.always
-                      ? "acceptForSession"
-                      : "accept",
+                  decision,
                 };
       this.rpc().respond(p.id, result);
+      this.resolveCodexRequest(a, p.id);
     } else {
       const input = p.params.input ?? {},
         // Only session-scoped rules; saving rules to settings files stays in the terminal.
@@ -904,14 +957,16 @@ export class AgentWorkspace {
           ? said[0]![1]!
           : said.map(([q, v]) => `${q}: ${v}`).join("\n"),
       );
-    a.pending = undefined;
-    a.state = "running";
+    if (this.profile(a.profile).source !== "codex") a.pending = undefined;
+    a.state = a.pending ? "waiting" : "running";
+    a.updatedAt = Date.now();
     this.emit();
   }
   async cancel(id: string) {
     const a = this.get(id);
     a.queue = [];
-    if (a.profile === "codex" && a.sid && a.turnId) {
+    if (this.profile(a.profile).source === "codex") {
+      if (!a.sid || !a.turnId) throw new Error("No active Codex reply to stop");
       const rpc = this.rpc();
       await rpc.ready;
       await rpc.call("turn/interrupt", { threadId: a.sid, turnId: a.turnId });
@@ -921,6 +976,8 @@ export class AgentWorkspace {
     }
     a.state = "stopped";
     a.pending = undefined;
+    this.codexRequests.delete(a.id);
+    a.updatedAt = Date.now();
     this.emit();
   }
   dismiss(id: string) {

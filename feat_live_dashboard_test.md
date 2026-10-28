@@ -1,5 +1,48 @@
 # Live dashboard and session chat: test record
 
+## 2026-10-28: auto mode, model labels, portrait scrolling and profile filters
+
+- New Claude agents persist `permissionMode: auto`. Saved agents without that field
+  and sessions taken over through resume retain manual permissions. Codex approval
+  settings are unchanged. Questions and approval cards remain available.
+- Synthetic Claude error records do not replace the real model or create usage
+  buckets. Their transcript text is retained. Metrics cache version 3 forces a
+  fresh read of older caches; source transcripts are unchanged.
+- The Agents board keeps the same scroll container and horizontal offset across
+  live redraws. Sessions now exposes the existing profile filter. Keyboard help
+  shows Option-Command-F for the Mac window.
+
+Validation:
+
+- Regression tests failed before the implementation: a new Claude process received
+  manual rather than auto, and a synthetic record replaced opus as the model.
+- `cd ts && npm test`: 102 passed, 0 failed. Local API tests require socket access;
+  the initial sandbox run failed with listen EPERM and was repeated outside it.
+- `cd ts && npm run typecheck`: passed. Dashboard JavaScript syntax check passed.
+- Portrait Chromium window, 900 x 1500, sidebar open: after 50 redraws, the board
+  was the same DOM node and scrollLeft remained 250. Browser check script:
+  `/private/tmp/cfind-browser-probe.cjs`.
+- Sessions: personal, claude and codex each showed only the selected profile.
+  Full-text search used a controlled API response with one result per profile;
+  each filter returned exactly its own row. Shortcut help showed Option-Command-F.
+- Isolated native WKWebView, 900 x 1500, 100 fixture messages, insertion into the
+  composer at zoom 1.0 and 1.1, sidebar shown and hidden: the composer bottom stayed
+  at 1500, window scrollY stayed 0, and multiline height increased as expected.
+  The reported typing movement was not reproduced. This check used DOM editing;
+  it does not prove physical-key behavior in the user's installed app.
+  Harness: `/private/tmp/cfind-wkprobe.swift` and `/private/tmp/cfind-wkprobe.js`.
+
+Applied to the running service after confirming no running, queued or waiting
+dashboard agents. The rebuilt live cache has version 3, zero synthetic session
+labels and zero synthetic usage buckets. No transcripts or uploaded images were
+deleted. Item 6 remains undefined; the supplied image did not identify the data
+to clear. No cleanup change was made.
+
+Rerun the portrait scroll test during updates and both session-filter paths before
+changing render(). For typing, obtain the exact window size, zoom, open chat and
+physical-key reproduction before selecting a further fix. Mac build and installed
+shortcut status are recorded in cfind-apple/feat_mac_app_test.md.
+
 Updated 2026-10-27. Machine: macOS, Node 24.18.1, Claude Code 2.1.311, Codex CLI 0.163.0 (0.164.0 for E21 to E23).
 A copy lives in the private Notion test plan, sections G to M.
 
