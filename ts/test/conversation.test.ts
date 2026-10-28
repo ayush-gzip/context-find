@@ -16,12 +16,6 @@ test("Claude transcript becomes chat messages with paired tool output", () => {
     jsonl([
       {
         type: "user",
-        uuid: "u0",
-        timestamp: "2026-10-27T10:00:00Z",
-        message: { content: "<command-name>/clear</command-name>" },
-      },
-      {
-        type: "user",
         uuid: "u1",
         isMeta: true,
         message: { content: "Base directory for this skill" },
@@ -384,6 +378,85 @@ test("task notices show as a note and paste tags are removed", () => {
       [
         ["user", "refer to \n\n\nAcme profiles"],
         ["note", 'Background command "Deploy" completed (exit code 0)'],
+      ],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("commands run in Claude Code's terminal show as one grey line", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-chat-")),
+    path = join(dir, "s.jsonl"),
+    caveat = (promptId: string) => ({
+      type: "user",
+      isMeta: true,
+      promptId,
+      message: {
+        content:
+          "<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>",
+      },
+    });
+  writeFileSync(
+    path,
+    jsonl([
+      caveat("p1"),
+      {
+        type: "user",
+        uuid: "a",
+        promptId: "p1",
+        message: { content: "Commands are in the form `/command [args]`" },
+      },
+      caveat("p2"),
+      {
+        type: "user",
+        uuid: "b",
+        promptId: "p2",
+        message: {
+          content:
+            "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus</command-args>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "c",
+        promptId: "p2",
+        message: {
+          content:
+            "<local-command-stdout>Set model to `Opus 5.5`</local-command-stdout>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "d",
+        promptId: "p3",
+        message: {
+          content:
+            "<command-name>/clear</command-name>\n<command-args></command-args>",
+        },
+      },
+      {
+        type: "user",
+        uuid: "e",
+        promptId: "p3",
+        message: { content: "<local-command-stdout></local-command-stdout>" },
+      },
+      {
+        type: "user",
+        uuid: "f",
+        promptId: "p4",
+        message: { content: "can this not be solved?" },
+      },
+    ]),
+  );
+  try {
+    assert.deepEqual(
+      readConversation(path).messages.map((m) => [m.role, m.text]),
+      [
+        ["note", "Commands are in the form /command [args]"],
+        ["note", "/model opus: Set model to Opus 5.5"],
+        ["note", "/clear"],
+        ["user", "can this not be solved?"],
       ],
     );
   } finally {

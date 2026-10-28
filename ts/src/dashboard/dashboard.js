@@ -167,6 +167,7 @@ function updateStatus() {
   $("#agent-count").textContent = allAgents().filter((a) =>
     ["running", "waiting", "queued"].includes(a.state),
   ).length;
+  renderRecents();
 }
 function sourceOptions() {
   return (
@@ -677,6 +678,7 @@ function closeDrawer() {
   S.view = null;
   S.chat = null;
   tellApp();
+  renderRecents();
   $("#drawer").hidden = true;
   $("#drawer").innerHTML = "";
 }
@@ -710,6 +712,7 @@ function openView(view) {
   S.view = view;
   S.chat = { key: viewKey(), history: [], omitted: 0, loading: true };
   tellApp();
+  renderRecents();
   // Esc makes one chat smaller; the next chat opens at the saved size.
   S.chatFull = localStorage.getItem("cfind-chat-size") !== "panel";
   const drawer = $("#drawer");
@@ -1107,8 +1110,8 @@ function composerState(a, s) {
       ? "Subagent transcripts are read-only."
       : s.open && s.tmux
         ? s.state === "waiting"
-          ? "Waiting for an answer in its terminal. Answer there."
-          : "Its state is unclear. Reply in its terminal."
+          ? "Answer in the terminal view above, with its buttons or your keyboard."
+          : "Its state is unclear. Open the terminal view to see it."
         : s.open && idle
           ? "Open in a terminal outside tmux. Reply there, or take over to continue here."
           : s.open || ["running", "waiting", "stale"].includes(s.state)
@@ -1143,8 +1146,9 @@ function renderChat() {
   $("#chat-meta").innerHTML =
     `<i class="state-dot ${esc(state0)}"></i> ${esc(state(state0))} · ${esc(label)} · ${esc(folder(a ? a.cwd : s.cwd))}${a?.model ? " · " + esc(a.model) : ""}`;
   const c = composerState(a, s),
-    confirm = S.confirmTakeover === S.chat.key;
-  const actions = `<button class="icon-button" data-find aria-label="Find in conversation" title="Find">${icon('<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>')}</button>${a && !RUNNING.includes(a.state) ? '<button class="button" data-dismiss>Remove card</button>' : ""}${c.takeover ? `<button class="button${confirm ? " light" : ""}" data-takeover>${confirm ? "Stop it in the terminal?" : "Take over"}</button>` : ""}<button class="icon-button" data-chat-size aria-label="${S.chatFull ? "Show as side panel" : "Show full screen"}" title="${S.chatFull ? "Side panel" : "Full screen"}">${icon(S.chatFull ? '<path d="M4 14h6v6m10-10h-6V4m0 6 7-7M3 21l7-7"/>' : '<path d="M14 4h6v6M10 20H4v-6m16-10-7 7M4 20l7-7"/>')}</button><button class="icon-button" data-close-drawer aria-label="Close conversation">×</button>`;
+    confirm = S.confirmTakeover === S.chat.key,
+    term = !!s && termShown(s);
+  const actions = `<button class="icon-button" data-find aria-label="Find in conversation" title="Find">${icon('<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>')}</button>${s && inTmux(s) ? `<button class="icon-button" data-term aria-pressed="${term}" aria-label="Terminal view" title="Terminal view">${icon('<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5M12.5 14.5h4"/>')}</button>` : ""}${a && !RUNNING.includes(a.state) ? '<button class="button" data-dismiss>Remove card</button>' : ""}${c.takeover ? `<button class="button${confirm ? " light" : ""}" data-takeover>${confirm ? "Stop it in the terminal?" : "Take over"}</button>` : ""}<button class="icon-button" data-chat-size aria-label="${S.chatFull ? "Show as side panel" : "Show full screen"}" title="${S.chatFull ? "Side panel" : "Full screen"}">${icon(S.chatFull ? '<path d="M4 14h6v6m10-10h-6V4m0 6 7-7M3 21l7-7"/>' : '<path d="M14 4h6v6M10 20H4v-6m16-10-7 7M4 20l7-7"/>')}</button><button class="icon-button" data-close-drawer aria-label="Close conversation">×</button>`;
   if ($("#chat-actions")._html !== actions) {
     $("#chat-actions").innerHTML = actions;
     $("#chat-actions")._html = actions;
@@ -1157,10 +1161,11 @@ function renderChat() {
   markFind();
   if (near && !$("#reader-q").value) list.scrollTop = list.scrollHeight;
   const pending = $("#chat-pending"),
-    pendingKey = a?.pending ? String(a.pending.id) : "";
+    pendingKey = a?.pending ? String(a.pending.id) : term ? "term" : "";
   if (pending.dataset.key !== pendingKey) {
     pending.dataset.key = pendingKey;
-    pending.innerHTML = a?.pending ? pendingHtml(a) : "";
+    pending.innerHTML = a?.pending ? pendingHtml(a) : term ? termHtml() : "";
+    if (term) pollTerm();
   }
   const t = $("#agent-prompt");
   t.disabled = !c.enabled;
@@ -1173,6 +1178,92 @@ function renderChat() {
     $("#composer-buttons")._html = buttons;
   }
   drawer.classList.toggle("read-only", !c.enabled);
+}
+const inTmux = (s) => !s.host && !s.parent && s.open && s.tmux;
+/** A tmux session shows its pane while a terminal menu waits, or when asked.
+ *  Hiding it lasts until the session's state changes. */
+function termShown(s) {
+  if (!inTmux(s)) return false;
+  const t = S.term;
+  return t?.key === S.chat.key && t.state === s.state
+    ? t.show
+    : s.state === "waiting";
+}
+function termHtml() {
+  const keys = [
+    ["Up", "↑"],
+    ["Down", "↓"],
+    ["Left", "←"],
+    ["Right", "→"],
+    ["Tab", "Tab"],
+    ["Escape", "Esc"],
+  ];
+  return `<div class="term-card" tabindex="0" aria-label="Terminal view. Keys you press here go to the terminal."><div class="term-head"><span>Terminal</span><small id="term-status">Click here to use your keyboard</small><button type="button" class="icon-button" data-term aria-label="Hide terminal view">×</button></div><pre class="term-screen" id="term-screen"></pre><div class="term-keys">${keys.map(([k, label]) => `<button type="button" class="button" data-term-key="${k}">${label}</button>`).join("")}<button type="button" class="button light" data-term-key="Enter">Enter</button></div></div>`;
+}
+/** Reads the pane every second while the card is on screen. Only the newest
+ *  call goes on, so a key press does not start a second loop. */
+async function pollTerm() {
+  clearTimeout(S.termTimer);
+  const run = (S.termRun = (S.termRun || 0) + 1),
+    s = S.view?.kind === "session" ? S.view.s : null,
+    screen = $("#term-screen");
+  if (!s || !screen) return;
+  try {
+    const d = await api(
+      `live-screen?profile=${encodeURIComponent(s.profile)}&sid=${encodeURIComponent(s.id)}`,
+    );
+    if (run !== S.termRun || !screen.isConnected) return;
+    $("#term-status").textContent = "Click here to use your keyboard";
+    if (screen.textContent !== d.screen) {
+      // Text, never HTML: the pane shows whatever the session printed.
+      screen.textContent = d.screen;
+      screen.scrollTop = screen.scrollHeight;
+    }
+  } catch (error) {
+    if (run !== S.termRun || !screen.isConnected) return;
+    $("#term-status").textContent = error.message;
+  }
+  S.termTimer = setTimeout(pollTerm, document.hidden ? 5000 : 1000);
+}
+async function sendTermKey(key) {
+  const s = S.view?.s;
+  if (!s) return;
+  try {
+    await api("agent", {
+      action: "live-key",
+      profile: s.profile,
+      sid: s.id,
+      key,
+    });
+    setTimeout(pollTerm, 120);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+const TERM_KEYS = {
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Enter: "Enter",
+  Escape: "Escape",
+  Tab: "Tab",
+  " ": "Space",
+};
+/** Keys pressed while the card has focus go to the terminal. */
+function termKeyDown(e) {
+  if (!e.target.closest?.(".term-card") || e.metaKey || e.ctrlKey || e.altKey)
+    return false;
+  const key =
+    e.key === "Tab" && e.shiftKey
+      ? "BTab"
+      : /^[1-9a-z]$/.test(e.key)
+        ? e.key
+        : TERM_KEYS[e.key];
+  if (!key) return false;
+  e.preventDefault();
+  sendTermKey(key);
+  return true;
 }
 function markFind() {
   const q = $("#reader-q")?.value.trim().toLowerCase();
@@ -1310,7 +1401,21 @@ document.addEventListener("click", async (e) => {
   try {
     if (b.dataset.page) navigate(b.dataset.page);
     if (b.dataset.slash) pickSlash(b.dataset.slash);
+    if (b.dataset.termKey) sendTermKey(b.dataset.termKey);
+    if (b.hasAttribute("data-term")) {
+      S.term = {
+        key: S.chat.key,
+        state: S.view.s.state,
+        show: !termShown(S.view.s),
+      };
+      renderChat();
+    }
     if (b.id === "new-agent" || b.hasAttribute("data-new")) openNew();
+    if (b.hasAttribute("data-search")) openPalette();
+    if (b.id === "sidebar-toggle")
+      setSidebar(
+        !document.documentElement.classList.contains("sidebar-hidden"),
+      );
     if (b.hasAttribute("data-close-dialog")) $("#new-dialog").close();
     if (b.hasAttribute("data-close-login")) {
       $("#login-dialog").close();
@@ -1625,10 +1730,18 @@ function shortcut(e) {
   return true;
 }
 // The / menu: Claude's commands for this chat's profile and folder.
+// Claude's model names for dashboard agents; /model with one changes the model
+// for that agent only. A tmux chat opens Claude's own picker in the terminal view.
+const MODELS = [
+  { name: "model default", description: "Your usual model" },
+  { name: "model opus", description: "Most capable" },
+  { name: "model sonnet", description: "Fast and capable" },
+  { name: "model haiku", description: "Fastest" },
+];
 function slashMenu() {
   const t = $("#agent-prompt"),
     m = $("#slash-menu"),
-    q = /^\/(\S*)$/.exec(t?.value ?? "")?.[1],
+    q = /^\/(\S*|model\s+\S*)$/.exec(t?.value ?? "")?.[1]?.replace(/\s+/, " "),
     a = viewAgent(),
     s = S.view?.kind === "session" ? S.view.s : null,
     c = a || s;
@@ -1657,14 +1770,18 @@ function slashMenu() {
             ? 2
             : 3;
     },
-    found = Array.isArray(all)
-      ? all
-          .filter((x) => (live || !x.terminal) && rank(x.name) < 3)
-          .sort(
-            (x, y) =>
-              rank(x.name) - rank(y.name) || x.name.localeCompare(y.name),
-          )
-      : [];
+    found = !Array.isArray(all)
+      ? []
+      : q.includes(" ")
+        ? !live && all.some((x) => x.name === "model")
+          ? MODELS.filter((x) => rank(x.name) === 0)
+          : []
+        : all
+            .filter((x) => (live || !x.terminal) && rank(x.name) < 3)
+            .sort(
+              (x, y) =>
+                rank(x.name) - rank(y.name) || x.name.localeCompare(y.name),
+            );
   // Codex chats get no commands, so no menu.
   if (Array.isArray(all) && !found.length) return (m.hidden = true);
   if (m.dataset.q !== q) {
@@ -1712,6 +1829,11 @@ function slashKey(e) {
 }
 function pickSlash(name) {
   const t = $("#agent-prompt");
+  if (name.startsWith("model ")) {
+    t.value = "/" + name;
+    $("#slash-menu").hidden = true;
+    return $("#agent-form").requestSubmit();
+  }
   t.value = "/" + name + " ";
   t.focus();
   t.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1725,7 +1847,7 @@ document.addEventListener("focusout", (e) => {
     $("#slash-menu")?.setAttribute("hidden", "");
 });
 document.addEventListener("keydown", (e) => {
-  if (slashKey(e)) return;
+  if (slashKey(e) || termKeyDown(e)) return;
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     openPalette();
@@ -1822,9 +1944,75 @@ $$(".nav-item[data-page]").forEach((b) => {
   const span = b.querySelector("span");
   if (span) span.innerHTML = icon(navIcons[b.dataset.page] || "");
 });
+$("#new-agent span").innerHTML = icon('<path d="M12 5v14M5 12h14"/>');
+$("[data-search] span").innerHTML = icon(
+  '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+);
+$("#sidebar-toggle").innerHTML = icon(
+  '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M9.5 4.5v15"/>',
+);
+/** Recent conversations on this Mac, by project. Folded projects stay folded. */
+function renderRecents() {
+  const box = $("#recents");
+  if (!S.metrics) return;
+  const folded = new Set(
+      JSON.parse(localStorage.getItem("cfind-folded") || "[]"),
+    ),
+    open = S.view?.kind === "session" ? S.view.s.path : null,
+    when = (s) => s.updatedAt || s.mtime * 1000,
+    groups = new Map();
+  for (const s of S.metrics.sessions
+    .filter((s) => !s.parent && !s.host)
+    .sort((x, y) => when(y) - when(x))
+    .slice(0, 40)) {
+    if (!groups.has(s.cwd)) groups.set(s.cwd, []);
+    groups.get(s.cwd).push(s);
+  }
+  const html = [...groups]
+    .map(
+      ([cwd, list]) =>
+        `<details class="recent-group" data-cwd="${esc(cwd)}"${folded.has(cwd) ? "" : " open"}><summary title="${esc(cwd)}">${esc(folder(cwd).split("/").pop())}</summary>${list.map((s) => `<button class="recent-item${s.path === open ? " active" : ""}" data-session="${esc(s.id)}" data-profile-id="${esc(s.profile || s.source)}" data-path="${esc(s.path)}" title="${esc(s.title || s.summary)}"><span>${esc(s.title || s.summary || "Untitled")}</span>${RUNNING.includes(s.state) ? `<i class="state-dot ${esc(s.state)}"></i>` : ""}</button>`).join("")}</details>`,
+    )
+    .join("");
+  if (box._html !== html) {
+    box.innerHTML = html;
+    box._html = html;
+  }
+}
+document.addEventListener(
+  "toggle",
+  (e) => {
+    const g = e.target.closest?.(".recent-group");
+    if (!g) return;
+    const folded = new Set(
+      JSON.parse(localStorage.getItem("cfind-folded") || "[]"),
+    );
+    if (g.open) folded.delete(g.dataset.cwd);
+    else folded.add(g.dataset.cwd);
+    localStorage.setItem("cfind-folded", JSON.stringify([...folded]));
+  },
+  true,
+);
+// The Mac app's page runs under the title bar: empty space in the top rows
+// moves the window, and a double click zooms it, as a title bar does.
+document.addEventListener("mousedown", (e) => {
+  const app = window.webkit?.messageHandlers?.cfind;
+  if (
+    !app ||
+    e.button !== 0 ||
+    !e.target.closest(".sidebar-top, .topbar, .drawer-head") ||
+    e.target.closest("button, a, input, select, textarea")
+  )
+    return;
+  // A drag must not start a text selection in the title.
+  e.preventDefault();
+  app.postMessage(e.detail === 2 ? "window:zoom" : "window:drag");
+});
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("cfind-theme", theme);
+  // The Mac app's glass follows the page, not the system appearance.
+  window.webkit?.messageHandlers?.cfind?.postMessage("theme:" + theme);
   $("#theme-toggle").innerHTML = icon(
     theme === "dark"
       ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>'

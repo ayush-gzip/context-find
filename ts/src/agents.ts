@@ -44,6 +44,8 @@ export interface Agent {
   history?: string;
   turnId?: string;
   model?: string;
+  /** Set with `/model`; Claude starts with it again after a restart. */
+  pickedModel?: string;
   state: string;
   startedAt: number;
   updatedAt: number;
@@ -614,11 +616,35 @@ export class AgentWorkspace {
   }
   async send(id: string, prompt: string, images: string[] = []) {
     const a = this.get(id);
+    const model = /^\/model\s+(\S+)$/.exec(prompt.trim())?.[1];
+    if (model && !images.length && this.profile(a.profile).source !== "codex") {
+      this.setModel(a, model);
+      return a;
+    }
     if (a.queue.length >= 20) throw new Error("Agent queue is full");
     a.queue.push({ text: prompt, images });
     if (!["running", "waiting"].includes(a.state)) void this.next(a);
     this.emit();
     return a;
+  }
+  /** Claude's control request changes this agent only. Typed in a terminal,
+   *  /model would also save it as the default for new sessions. */
+  private setModel(a: Agent, model: string) {
+    a.pickedModel = model === "default" ? undefined : model;
+    const child = this.claude.get(a.id);
+    if (child)
+      child.stdin.write(
+        JSON.stringify({
+          type: "control_request",
+          request_id: randomUUID(),
+          request: {
+            subtype: "set_model",
+            ...(a.pickedModel ? { model: a.pickedModel } : {}),
+          },
+        }) + "\n",
+      );
+    else push(a, "note", `Uses ${model} from the next message`);
+    this.emit();
   }
   unqueue(id: string, index: number) {
     const a = this.get(id);
@@ -699,6 +725,7 @@ export class AgentWorkspace {
             "stdio",
           ];
           if (a.sid) args.push("--resume", a.sid);
+          if (a.pickedModel) args.push("--model", a.pickedModel);
           child = spawn(process.env["CFIND_CLAUDE_BIN"] ?? "claude", args, {
             cwd: a.cwd,
             env: this.env(a.profile),
@@ -716,6 +743,18 @@ export class AgentWorkspace {
                   params: p.request,
                 };
                 a.state = "waiting";
+              } else if (p.type === "control_response") {
+                const r = p.response;
+                if (r?.subtype === "error")
+                  push(
+                    a,
+                    "note",
+                    `Could not change the model: ${String(r.error).slice(0, 300)}`,
+                  );
+                else if (typeof r?.response?.model === "string") {
+                  a.model = r.response.model;
+                  push(a, "note", `Model set to ${a.model}`);
+                }
               } else if (p.type === "control_cancel_request") {
                 if (a.pending?.id === p.request_id) {
                   a.pending = undefined;

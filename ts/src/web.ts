@@ -41,7 +41,14 @@ import { join } from "node:path";
 import { Monitor, dashboardProfiles, monitorDir } from "./monitor.ts";
 import { AgentWorkspace } from "./agents.ts";
 import { readConversation } from "./conversation.ts";
-import { codexHolder, queueCodex, sendToPane, takeOver } from "./live.ts";
+import {
+  capturePane,
+  codexHolder,
+  queueCodex,
+  sendKey,
+  sendToPane,
+  takeOver,
+} from "./live.ts";
 import { Devices, tailscaleHost } from "./devices.ts";
 import {
   MAX_UPLOAD,
@@ -351,6 +358,19 @@ export function createWebServer(
             });
             return;
           }
+          if (url.pathname === "/api/live-screen") {
+            startMonitor();
+            const live = monitor.live(
+              url.searchParams.get("profile") ?? "",
+              url.searchParams.get("sid") ?? "",
+            );
+            if (!live) {
+              json(res, 404, { error: "This session is not open in a terminal" });
+              return;
+            }
+            json(res, 200, { screen: capturePane(live) });
+            return;
+          }
           if (url.pathname === "/api/accounts") {
             json(res, 200, { accounts: await workspace.accounts() });
             return;
@@ -494,11 +514,17 @@ export function createWebServer(
               );
               return;
             }
-            if (data.action === "live-send" || data.action === "takeover") {
+            if (
+              data.action === "live-send" ||
+              data.action === "live-key" ||
+              data.action === "takeover"
+            ) {
               const live = monitor.live(String(data.profile), String(data.sid));
               if (!live)
                 throw new Error("This session is not open in a terminal");
               if (data.action === "takeover") await takeOver(live);
+              else if (data.action === "live-key")
+                sendKey(live, String(data.key));
               else if (!said(data.prompt)) throw new Error("Prompt required");
               else
                 await sendToPane(live, withPaths(data.prompt, images), () =>

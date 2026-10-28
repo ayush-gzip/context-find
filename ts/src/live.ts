@@ -53,11 +53,26 @@ function ready(r: LiveRecord | undefined, busyOk: boolean) {
   );
 }
 
-/** A PID can be reused, so the recorded start time must match before any action. */
 function verify(r: LiveRecord, busyOk = false) {
   ready(r, busyOk);
+  sameProcess(r);
+}
+
+/** A PID can be reused, so the recorded start time must match before any action. */
+function sameProcess(r: LiveRecord) {
   if (!r.procStart || procStart(r.pid) !== r.procStart.replace(/\s+/g, " "))
     throw new Error("Could not confirm the terminal process for this session");
+}
+
+/** tmux reuses pane ids, so the pane must still run this session's process. */
+function checkPane(r: LiveRecord) {
+  const tmux = tmuxBin(),
+    panePid = Number(
+      quiet(tmux, ["display-message", "-p", "-t", r.tmux!, "#{pane_pid}"]),
+    );
+  if (!panePid || !ancestors(r.pid).includes(panePid))
+    throw new Error("The tmux pane no longer runs this session");
+  return tmux;
 }
 
 function ancestors(pid: number) {
@@ -78,12 +93,7 @@ export async function sendToPane(
 ) {
   if (!r.tmux) throw new Error("This session is not in tmux");
   verify(r, true);
-  const tmux = tmuxBin(),
-    panePid = Number(
-      quiet(tmux, ["display-message", "-p", "-t", r.tmux, "#{pane_pid}"]),
-    );
-  if (!panePid || !ancestors(r.pid).includes(panePid))
-    throw new Error("The tmux pane no longer runs this session");
+  const tmux = checkPane(r);
   // Control characters could end the bracketed paste early and act as keys.
   const clean = text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ""),
     buffer = "cfind-" + randomBytes(4).toString("hex");
@@ -99,6 +109,43 @@ export async function sendToPane(
     );
   }
   run(tmux, ["send-keys", "-t", r.tmux, "Enter"]);
+}
+
+/** The pane's screen as plain text, for menus the transcript does not record. */
+export function capturePane(r: LiveRecord) {
+  if (!r.tmux) throw new Error("This session is not in tmux");
+  sameProcess(r);
+  // No -e: tmux leaves out colours and other escape codes.
+  const screen = run(checkPane(r), ["capture-pane", "-p", "-t", r.tmux]);
+  return screen
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .split("\n")
+    .slice(-40)
+    .join("\n");
+}
+
+// Enough to move through a menu and pick or close it. Letters are menu keys too,
+// such as s for "this session only" in Claude's model picker.
+const KEYS = new Set([
+  "Up",
+  "Down",
+  "Left",
+  "Right",
+  "Enter",
+  "Escape",
+  "Tab",
+  "BTab",
+  "Space",
+  ..."123456789",
+  ..."abcdefghijklmnopqrstuvwxyz",
+]);
+
+/** One named key into the pane, such as Down or Enter in a terminal menu. */
+export function sendKey(r: LiveRecord, key: string) {
+  if (!KEYS.has(key)) throw new Error("Unknown key");
+  if (!r.tmux) throw new Error("This session is not in tmux");
+  sameProcess(r);
+  run(checkPane(r), ["send-keys", "-t", r.tmux, key]);
 }
 
 export async function takeOver(r: LiveRecord) {

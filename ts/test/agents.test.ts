@@ -237,6 +237,73 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test("/model on a Claude agent uses the set_model control request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-claude-")),
+    binary = join(dir, "claude"),
+    prior = process.env.CFIND_CLAUDE_BIN;
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env node
+const send=o=>console.log(JSON.stringify(o));
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line);
+ if(m.type==='user'){send({type:'system',subtype:'init',session_id:'sid1',model:'claude-opus'});send({type:'result',subtype:'success',result:'done'});}
+ if(m.type==='control_request'&&m.request.subtype==='set_model'){
+  const model=m.request.model;
+  send(model==='bad'
+   ?{type:'control_response',response:{subtype:'error',request_id:m.request_id,error:'Unknown model'}}
+   :{type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{model:model?'claude-'+model:'claude-default'}}});
+ }
+});`,
+    { mode: 0o700 },
+  );
+  process.env.CFIND_CLAUDE_BIN = binary;
+  const w = new AgentWorkspace(
+    [
+      {
+        id: "claude",
+        source: "claude",
+        label: "Claude",
+        path: join(dir, ".claude", "projects"),
+      },
+    ],
+    join(dir, "data"),
+  );
+  const until = async (check: () => boolean) => {
+    const end = Date.now() + 4000;
+    while (!check()) {
+      if (Date.now() > end) throw new Error("Protocol condition timed out");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  try {
+    const a = await w.create("claude", dir, "first");
+    await until(() => a.state === "idle" && a.model === "claude-opus");
+    await w.send(a.id, "/model bad");
+    await w.send(a.id, "/model sonnet");
+    await until(() => a.model === "claude-sonnet");
+    await w.send(a.id, " /model default ");
+    await until(() => a.model === "claude-default");
+    assert.equal(a.pickedModel, undefined);
+    assert.deepEqual(
+      a.messages.filter((m) => m.role !== "assistant").map((m) => m.text),
+      [
+        "first",
+        "Could not change the model: Unknown model",
+        "Model set to claude-sonnet",
+        "Model set to claude-default",
+      ],
+    );
+    assert.equal(a.queue.length, 0);
+    assert.equal(a.state, "idle");
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;
+    else process.env.CFIND_CLAUDE_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Codex tool items carry output and answers map to protocol responses", async () => {
   const a = newAgent("codex", "/project", "task");
   applyCodexEvent(a, "item/started", {

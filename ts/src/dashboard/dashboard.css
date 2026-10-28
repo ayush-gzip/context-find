@@ -13,7 +13,14 @@
   --selection: #0000000a;
   --blue: #007aff;
   --green: #34a853;
-  --sidebar: 218px;
+  --sidebar-w: 240px;
+  --sidebar: var(--sidebar-w);
+  /* Height of the top row: the sidebar's first row and the page's top bar. */
+  --bar: 48px;
+  /* Where the sidebar button sits; the Mac app moves it past the window buttons. */
+  --toggle-left: 12px;
+  --tint-a: #dde7ff;
+  --tint-b: #f2e4f6;
   --shadow: none;
   --user-bubble: #eaf2ff;
   --agent-bubble: #f4f4f6;
@@ -41,6 +48,8 @@
   --selection: #ffffff0d;
   --blue: #0a84ff;
   --green: #64d279;
+  --tint-a: #1b2442;
+  --tint-b: #2b1d34;
   --shadow: none;
   --user-bubble: #172338;
   --agent-bubble: #222226;
@@ -55,7 +64,11 @@
 body {
   margin: 0;
   color: var(--text);
-  background: var(--bg);
+  /* Soft colour that only the sidebar's frosted glass shows; the page covers the rest. */
+  background:
+    radial-gradient(70vh 60vh at 0 0, var(--tint-a), transparent),
+    radial-gradient(60vh 70vh at 0 100%, var(--tint-b), transparent), var(--bg);
+  background-attachment: fixed;
   letter-spacing: -0.006em;
 }
 button,
@@ -164,25 +177,109 @@ input::placeholder,
 textarea::placeholder {
   color: var(--muted);
 }
-/* A small pane of glass floating at the left edge. */
+/* Glass along the window's left edge, top to bottom. In the Mac app the desktop
+   shows through it; in a browser it frosts the tinted page behind it. */
 .sidebar {
   position: fixed;
-  inset: 12px auto 12px 12px;
-  width: calc(var(--sidebar) - 24px);
-  padding: 14px 8px 10px;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-w);
+  padding: 0 8px 10px;
   background: var(--sidebar-bg);
   -webkit-backdrop-filter: blur(30px) saturate(1.8);
   backdrop-filter: blur(30px) saturate(1.8);
-  border: 1px solid var(--glass-edge);
-  border-radius: 12px;
-  box-shadow: var(--glass-shadow);
+  border-right: 1px solid var(--glass-edge);
   display: flex;
   flex-direction: column;
-  /* Above the chat: a full-screen chat runs under it. */
   z-index: 40;
   transition:
     transform 0.2s ease,
     opacity 0.2s ease;
+}
+/* Stays in place when the sidebar slides away, as in Mac apps. */
+.sidebar-toggle {
+  position: fixed;
+  top: calc((var(--bar) - 26px) / 2);
+  left: var(--toggle-left);
+  z-index: 45;
+  color: var(--secondary);
+}
+.sidebar-top {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: var(--bar);
+  padding-left: calc(var(--toggle-left) + 26px);
+}
+.sidebar-actions {
+  margin: 4px 0 10px;
+}
+.nav-item kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font: 11px var(--mono);
+}
+.recents {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 14px -8px 0;
+  padding: 0 8px 16px;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+.recent-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  list-style: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: default;
+  user-select: none;
+}
+.recent-group > summary::-webkit-details-marker {
+  display: none;
+}
+.recent-group > summary::before {
+  content: "›";
+  width: 8px;
+  font-size: 13px;
+  transition: transform 0.15s ease;
+}
+.recent-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+.recent-group > summary:hover {
+  color: var(--secondary);
+}
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 22px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12.5px;
+  text-align: left;
+}
+.recent-item > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-item:hover {
+  background: var(--hover);
+}
+.recent-item.active {
+  background: var(--selection);
+  font-weight: 550;
 }
 .brand {
   display: flex;
@@ -206,42 +303,6 @@ textarea::placeholder {
   font-style: italic;
   line-height: 1;
   padding-bottom: 2px;
-}
-.workspace-label {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 6px 10px;
-  margin-top: 8px;
-  font-size: 12px;
-  font-weight: 550;
-}
-.workspace-label small {
-  display: block;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
-  margin-top: 2px;
-}
-.workspace-label > .online-dot {
-  margin-left: auto;
-}
-.avatar {
-  display: grid;
-  place-items: center;
-  background: #dbdce2;
-  color: #767983;
-  border-radius: 6px;
-  width: 22px;
-  height: 22px;
-  font-size: 13px;
-  font-weight: 400;
-}
-.nav-label {
-  font-size: 11px;
-  color: var(--muted);
-  padding: 0 6px;
-  margin: 6px 0 4px;
 }
 .nav-item {
   display: flex;
@@ -291,6 +352,7 @@ textarea::placeholder {
 }
 .sidebar-bottom {
   margin-top: auto;
+  padding-top: 8px;
 }
 .collector-info {
   display: flex;
@@ -309,11 +371,6 @@ textarea::placeholder {
   font-size: 11px;
   margin-top: 3px;
 }
-.sidebar-foot {
-  font-size: 11px;
-  color: var(--muted);
-  padding: 8px 6px 0;
-}
 .online-dot {
   display: inline-block;
   background: var(--green);
@@ -327,9 +384,10 @@ textarea::placeholder {
   transition: margin-left 0.2s ease;
   min-height: 100vh;
   padding-bottom: 30px;
+  background: var(--bg);
 }
 .topbar {
-  height: 44px;
+  height: var(--bar);
   padding: 0 28px;
   display: flex;
   align-items: center;
@@ -1464,21 +1522,33 @@ label textarea {
 .drawer[hidden] {
   display: none;
 }
+/* Full screen fills the window beside the sidebar, in a readable centered column. */
 .drawer.full {
-  width: 100vw;
+  width: calc(100vw - var(--sidebar));
   border-left: 0;
   box-shadow: none;
+  transition: width 0.2s ease;
 }
-/* Full screen keeps the chat in a readable centered column, clear of the
-   sidebar floating over its left edge. */
 .drawer.full .drawer-head,
 .drawer.full .conversation,
 .drawer.full .reader-find,
 .drawer.full .composer {
-  padding-inline: max(calc(var(--sidebar) + 16px), calc((100% - 840px) / 2));
+  padding-inline: max(16px, calc((100% - 840px) / 2));
 }
-.drawer.full .ask-card {
-  margin-inline: max(calc(var(--sidebar) + 16px), calc((100% - 840px) / 2));
+.drawer.full .drawer-head {
+  min-height: var(--bar);
+  padding-block: 6px;
+}
+.drawer.full .ask-card,
+.drawer.full .term-card {
+  margin-inline: max(16px, calc((100% - 840px) / 2));
+}
+/* With the sidebar away, the top rows make room for its button. */
+.sidebar-hidden .topbar {
+  padding-left: calc(var(--toggle-left) + 44px);
+}
+.sidebar-hidden .drawer.full .drawer-head {
+  padding-left: max(calc(var(--toggle-left) + 44px), calc((100% - 840px) / 2));
 }
 .drawer-head {
   display: flex;
@@ -2201,7 +2271,7 @@ label textarea {
 }
 @media (max-width: 1200px) {
   :root {
-    --sidebar: 218px;
+    --sidebar-w: 220px;
   }
   .sidebar {
     padding-left: 12px;
@@ -2345,19 +2415,22 @@ label textarea {
 }
 @media (max-width: 760px) {
   :root {
-    --sidebar: 80px;
+    --sidebar-w: 80px;
+    --toggle-left: 27px;
   }
   .sidebar {
-    padding: 12px 6px;
+    padding: 0 6px 10px;
+  }
+  .brand,
+  .recents,
+  .nav-item kbd {
+    display: none;
   }
   .brand {
     padding: 0;
     justify-content: center;
   }
   .brand > span:last-child,
-  .workspace-label,
-  .nav-label,
-  .sidebar-foot,
   .nav-item em,
   .collector-info,
   .nav-arrow {
@@ -2388,9 +2461,6 @@ label textarea {
   }
   .quota-summary {
     margin-top: 12px;
-  }
-  .topbar {
-    height: 44px;
   }
   .page-heading {
     margin-bottom: 16px;
@@ -2653,13 +2723,17 @@ label textarea {
     margin: 0 12px 10px;
     padding: 12px;
   }
+  .term-card {
+    margin: 0 12px 10px;
+  }
   .drawer.full .drawer-head,
   .drawer.full .conversation,
   .drawer.full .reader-find,
   .drawer.full .composer {
     padding-inline: 12px;
   }
-  .drawer.full .ask-card {
+  .drawer.full .ask-card,
+  .drawer.full .term-card {
     margin-inline: 12px;
   }
   .ask-options {
@@ -2874,7 +2948,7 @@ label textarea {
 }
 /* It slides out; once out, it takes no clicks and leaves the accessibility tree. */
 .sidebar-hidden .sidebar {
-  transform: translateX(calc(-100% - 16px));
+  transform: translateX(-100%);
   opacity: 0;
   visibility: hidden;
   transition:
@@ -3031,4 +3105,76 @@ label textarea {
   padding: 8px;
   color: var(--muted);
   font-size: 12.5px;
+}
+.term-card {
+  margin: 0 16px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+  outline: none;
+}
+.term-card:focus-within {
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+}
+.term-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.term-head small {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.term-screen {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 38vh;
+  overflow: auto;
+  border-block: 1px solid var(--line);
+  background: var(--code-bg);
+  font: 11.5px/1.45 var(--mono);
+  white-space: pre;
+}
+.term-keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.term-keys .button {
+  min-width: 36px;
+  height: 26px;
+}
+.icon-button[aria-pressed="true"] {
+  background: var(--selection);
+  color: var(--blue);
+}
+/* The Mac app: the window has no title bar, the page runs under the window
+   buttons, and native glass sits behind a see-through sidebar. */
+:root.mac-app {
+  --bar: var(--mac-bar, 52px);
+  --toggle-left: var(--mac-lights, 84px);
+}
+:root.mac-app,
+.mac-app body {
+  background: transparent;
+}
+.mac-app .sidebar {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.mac-app .brand {
+  display: none;
 }

@@ -118,6 +118,23 @@ function codexSummary(raw: string): string {
   return raw.trim().split("\n")[0] ?? "";
 }
 
+/** A /command line or its output, in the tags Claude Code logs them with. */
+function localCommand(
+  text: string,
+): { command?: string; output: string } | undefined {
+  const name = /^<command-name>([\s\S]*?)<\/command-name>/.exec(text);
+  if (name) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1];
+    return {
+      command: clean(`${name[1]} ${args ?? ""}`.trim(), 300),
+      output: "",
+    };
+  }
+  const output =
+    /^<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/.exec(text);
+  return output ? { output: output[2]! } : undefined;
+}
+
 export function readConversation(path: string): {
   messages: ChatMessage[];
   omitted: number;
@@ -189,11 +206,50 @@ export function readConversation(path: string): {
         result(String(p.call_id), codexOutput(p.output));
     }
   } else {
+    // A command typed in Claude Code's own terminal (/model, /cost) is logged as a
+    // caveat, then the command and its output, all with the caveat's promptId.
+    const localPrompts = new Set<unknown>();
+    let localNote: ChatMessage | undefined;
     for (const entry of entries(path)) {
       const kind = entry["type"],
         time = stamp(entry["timestamp"]),
         content = entry["message"]?.content;
       if (entry["isSidechain"]) continue;
+      if (kind === "user" && typeof content === "string") {
+        if (entry["isMeta"] && content.startsWith("<local-command-caveat>")) {
+          localPrompts.add(entry["promptId"]);
+          continue;
+        }
+        const local =
+          localCommand(content) ??
+          (!entry["isMeta"] &&
+          entry["promptId"] &&
+          localPrompts.has(entry["promptId"])
+            ? { output: content }
+            : undefined);
+        if (local) {
+          const text = clean(local.output.replace(/`/g, "").trim(), 300);
+          if (local.command !== undefined)
+            out.push(
+              (localNote = {
+                id: String(entry["uuid"] ?? out.length),
+                role: "note",
+                text: [local.command, text].filter(Boolean).join(": "),
+                time,
+              }),
+            );
+          else if (localNote && out[out.length - 1] === localNote) {
+            if (text) localNote.text += ": " + text;
+          } else if (text)
+            out.push({
+              id: String(entry["uuid"] ?? out.length),
+              role: "note",
+              text,
+              time,
+            });
+          continue;
+        }
+      }
       if (kind === "user") {
         // Claude Code reports finished background tasks as a user turn.
         if (entry["origin"]?.kind === "task-notification") {
