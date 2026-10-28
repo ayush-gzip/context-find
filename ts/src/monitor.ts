@@ -405,7 +405,7 @@ export class Monitor {
       const saved = JSON.parse(
         readFileSync(join(this.dataDir, "metrics.json"), "utf8"),
       );
-      if (saved.version === 3) this.cache = saved.files;
+      if (saved.version === 4) this.cache = saved.files;
     } catch {}
   }
   subscribe(fn: () => void) {
@@ -530,7 +530,7 @@ export class Monitor {
       const path = join(this.dataDir, "metrics.json");
       writeFileSync(
         path + ".tmp",
-        JSON.stringify({ version: 3, files: this.cache }),
+        JSON.stringify({ version: 4, files: this.cache }),
         { mode: 0o600 },
       );
       renameSync(path + ".tmp", path);
