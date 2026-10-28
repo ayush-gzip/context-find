@@ -97,6 +97,10 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E37 | sidebar beside a full-screen chat | chat starts at the sidebar edge (218 px), sidebar stays visible; with ⌘B the chat uses the full width; sidebar 12 px from the window edge. Pass |
 | E38 | ⌘1 to ⌘6 | ⌘3 → #sessions, ⌘4 → #usage, ⌘1 → #overview (Chrome, WKWebView native keys, Mac UI test). A full-screen chat closes when you change section. Pass |
 | E39 | Esc on a full-screen chat | first Esc → side panel, second Esc → closed; the saved size stays full, so the next chat opens full screen. Pass |
+| E40 | `/` menu in the message box (Chrome, live tmux chat, sending stubbed out) | `/` shows "Loading commands…", then 103 commands (about 4 s, once per profile and folder); `/comp` → compact first; ↑↓ moves; Tab and click fill `/name `; Esc closes only the menu; Enter on a full name sends; Enter on a part fills. Pass |
+| E41 | terminal-only commands | `doctor`, `color`, `focus`, `reload-plugins` (Claude's `terminal_slash_commands`) show in a tmux chat and are hidden for dashboard agents and resumed chats. Pass (tmux side checked) |
+| E42 | `GET /api/commands` | folder this profile never ran in → 403 "Unknown folder"; known folders → 200. Claude runs `-p /cost` with hooks and MCP off; no model call. Pass |
+| E43 | unit tests (`test/commands.test.ts`) | descriptions from SKILL.md (folded), project commands, plugin commands; built-in text; `__` names hidden; one probe per folder; failed probe not cached; frontmatter edge cases. 101/101. Pass |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"

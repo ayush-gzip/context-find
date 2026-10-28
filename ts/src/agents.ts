@@ -12,6 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { monitorDir, type Profile } from "./monitor.ts";
+import { claudeCommands } from "./commands.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 
 export interface Message {
@@ -478,6 +479,13 @@ export class AgentWorkspace {
       else env["CLAUDE_CONFIG_DIR"] = dir;
     }
     return env;
+  }
+  /** The / menu for a profile. Codex gets none: its app server does not run them. */
+  async commands(profile: string, cwd: string) {
+    const p = this.profile(profile);
+    return p.source === "claude"
+      ? claudeCommands(this.env(profile), dirname(p.path), cwd)
+      : [];
   }
   async accounts() {
     return Promise.all(

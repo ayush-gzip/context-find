@@ -26,6 +26,9 @@ const S = {
   chat: null,
   drafts: {},
   images: {},
+  // The / menu per profile and folder: a list, null while it loads, or an error.
+  commands: {},
+  slashAt: 0,
   chatFull: localStorage.getItem("cfind-chat-size") !== "panel",
   // Agents whose subagents the user unfolded.
   openKids: new Set(),
@@ -712,7 +715,7 @@ function openView(view) {
   const drawer = $("#drawer");
   drawer.hidden = false;
   drawer.classList.toggle("full", S.chatFull);
-  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-images" id="composer-images" hidden></div><div class="composer-box"><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><span id="composer-buttons"></span></div><div class="composer-footer" id="composer-hint"></div></form>`;
+  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-images" id="composer-images" hidden></div><div class="composer-box"><div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><span id="composer-buttons"></span></div><div class="composer-footer" id="composer-hint"></div></form>`;
   $("#agent-prompt").value = S.drafts[S.chat.key] || "";
   grow($("#agent-prompt"));
   renderAttachments();
@@ -1301,6 +1304,7 @@ document.addEventListener("click", async (e) => {
   if (!b) return;
   try {
     if (b.dataset.page) navigate(b.dataset.page);
+    if (b.dataset.slash) pickSlash(b.dataset.slash);
     if (b.id === "new-agent" || b.hasAttribute("data-new")) openNew();
     if (b.hasAttribute("data-close-dialog")) $("#new-dialog").close();
     if (b.hasAttribute("data-close-login")) {
@@ -1526,6 +1530,7 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "agent-prompt") {
     S.drafts[S.chat.key] = e.target.value;
     grow(e.target);
+    slashMenu();
   }
   if (e.target.matches("[data-other]")) {
     const ready = $('[data-respond="answer"]');
@@ -1614,7 +1619,108 @@ function shortcut(e) {
   else return false;
   return true;
 }
+// The / menu: Claude's commands for this chat's profile and folder.
+function slashMenu() {
+  const t = $("#agent-prompt"),
+    m = $("#slash-menu"),
+    q = /^\/(\S*)$/.exec(t?.value ?? "")?.[1],
+    a = viewAgent(),
+    s = S.view?.kind === "session" ? S.view.s : null,
+    c = a || s;
+  if (!m) return;
+  if (q === undefined || t.disabled || !c?.profile) return (m.hidden = true);
+  const key = c.profile + "\0" + c.cwd;
+  if (!(key in S.commands)) {
+    S.commands[key] = null;
+    api(
+      `commands?profile=${encodeURIComponent(c.profile)}&cwd=${encodeURIComponent(c.cwd)}`,
+    )
+      .then((d) => (S.commands[key] = d.commands))
+      .catch((error) => (S.commands[key] = error.message))
+      .finally(slashMenu);
+  }
+  const all = S.commands[key],
+    live = composerState(a, s).live,
+    rank = (name) => {
+      const n = name.toLowerCase(),
+        w = q.toLowerCase();
+      return n.startsWith(w)
+        ? 0
+        : n.slice(n.lastIndexOf(":") + 1).startsWith(w)
+          ? 1
+          : n.includes(w)
+            ? 2
+            : 3;
+    },
+    found = Array.isArray(all)
+      ? all
+          .filter((x) => (live || !x.terminal) && rank(x.name) < 3)
+          .sort(
+            (x, y) =>
+              rank(x.name) - rank(y.name) || x.name.localeCompare(y.name),
+          )
+      : [];
+  // Codex chats get no commands, so no menu.
+  if (Array.isArray(all) && !found.length) return (m.hidden = true);
+  if (m.dataset.q !== q) {
+    m.dataset.q = q;
+    S.slashAt = 0;
+  }
+  S.slashAt = Math.min(S.slashAt, Math.max(0, found.length - 1));
+  m.innerHTML =
+    all === null
+      ? '<div class="slash-note">Loading commands…</div>'
+      : typeof all === "string"
+        ? `<div class="slash-note">${esc(all)}</div>`
+        : found
+            .map(
+              (x, i) =>
+                `<button type="button" class="slash-item${i === S.slashAt ? " active" : ""}" role="option" data-slash="${esc(x.name)}"><span class="slash-name">/${esc(x.name)}${x.hint ? ` <small>${esc(x.hint)}</small>` : ""}</span><span class="slash-desc">${esc(x.description || "")}</span></button>`,
+            )
+            .join("");
+  m.hidden = false;
+  m.querySelector(".active")?.scrollIntoView({ block: "nearest" });
+}
+function slashKey(e) {
+  const m = $("#slash-menu");
+  if (e.target.id !== "agent-prompt" || !m || m.hidden || e.isComposing)
+    return false;
+  const items = $$("[data-slash]", m),
+    pick = items[S.slashAt]?.dataset.slash;
+  if (e.key === "Escape") m.hidden = true;
+  else if (!items.length) return false;
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    S.slashAt =
+      (S.slashAt + (e.key === "ArrowDown" ? 1 : -1) + items.length) %
+      items.length;
+    slashMenu();
+  } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+    // Enter on a command typed in full sends it.
+    if (e.key === "Enter" && e.target.value === "/" + pick) {
+      m.hidden = true;
+      return false;
+    }
+    pickSlash(pick);
+  } else return false;
+  e.preventDefault();
+  return true;
+}
+function pickSlash(name) {
+  const t = $("#agent-prompt");
+  t.value = "/" + name + " ";
+  t.focus();
+  t.dispatchEvent(new Event("input", { bubbles: true }));
+}
+// Clicking the menu keeps the cursor in the message box; leaving the box closes it.
+document.addEventListener("mousedown", (e) => {
+  if (e.target.closest?.("#slash-menu")) e.preventDefault();
+});
+document.addEventListener("focusout", (e) => {
+  if (e.target.id === "agent-prompt")
+    $("#slash-menu")?.setAttribute("hidden", "");
+});
 document.addEventListener("keydown", (e) => {
+  if (slashKey(e)) return;
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     openPalette();

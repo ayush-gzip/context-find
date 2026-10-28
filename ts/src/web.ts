@@ -331,6 +331,26 @@ export function createWebServer(
             json(res, 200, workspace.snapshot());
             return;
           }
+          if (url.pathname === "/api/commands") {
+            startMonitor();
+            const profile = url.searchParams.get("profile") ?? "",
+              cwd = url.searchParams.get("cwd") ?? "",
+              seen = (x: { profile: string; cwd: string }) =>
+                x.profile === profile && x.cwd === cwd;
+            // Claude starts in this folder to list its commands, so only
+            // folders where this profile already ran.
+            if (
+              !workspace.snapshot().agents.some(seen) &&
+              !monitor.snapshot().sessions.some(seen)
+            ) {
+              json(res, 403, { error: "Unknown folder" });
+              return;
+            }
+            json(res, 200, {
+              commands: await workspace.commands(profile, cwd),
+            });
+            return;
+          }
           if (url.pathname === "/api/accounts") {
             json(res, 200, { accounts: await workspace.accounts() });
             return;
