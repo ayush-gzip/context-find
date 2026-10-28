@@ -28,6 +28,8 @@ const S = {
   chatStream: null,
   drafts: {},
   images: {},
+  /** Sent messages the chat does not show yet, by chat key. */
+  outbox: {},
   // The / menu per profile and folder: a list, null while it loads, or an error.
   commands: {},
   slashAt: 0,
@@ -956,6 +958,11 @@ function chatItems(a, s) {
       html: `<div class="msg user queued">${imagesHtml(q.images)}${q.text ? `<div class="bubble">${md(q.text)}</div>` : ""}<div class="msg-meta"><span>Queued</span><button type="button" class="link-button" data-unqueue="${i}">Remove</button></div></div>`,
     }),
   );
+  for (const p of outbox(a))
+    items.push({
+      key: "p:" + p.id,
+      html: `<div class="msg user${p.dashed ? " queued" : ""}">${imagesHtml(p.images)}${p.text ? `<div class="bubble">${md(p.text)}</div>` : ""}<div class="msg-meta">${p.note ? `<span>${esc(p.note)}</span>` : `<span>You</span><time>${esc(clock(p.at))}</time>`}</div></div>`,
+    });
   if (a?.error)
     items.push({
       key: "error",
@@ -977,6 +984,29 @@ function chatItems(a, s) {
       html: `<div class="chat-note">No messages yet</div>`,
     });
   return items;
+}
+/** A sent message shows at once. It goes when the chat has it: the agent's
+ *  messages or queue, or the transcript for a message typed into a terminal. */
+function outbox(a) {
+  const list = S.outbox[S.chat.key];
+  if (!list?.length) return [];
+  const seen = a
+      ? [...a.messages, ...a.queue.map((q) => ({ role: "user", text: q.text }))]
+      : S.chat.history,
+    flat = (t) => (t || "").replace(/\s+/g, " ").trim();
+  return (S.outbox[S.chat.key] = list.filter((p) => {
+    // A ! command shows as its command, in a Shell row or <bash-input>.
+    const want = flat(p.text.replace(/^!/, ""));
+    return (
+      Date.now() - p.at < 30 * 60 * 1000 &&
+      !seen.some(
+        (m) =>
+          (m.role === "user" || m.role === "tool") &&
+          !(m.time < p.at - 5000) &&
+          flat(m.text).includes(want),
+      )
+    );
+  }));
 }
 // Markdown is most of a render's cost. Live updates replace a changed message
 // with a new object, so an unchanged one keeps its HTML.
@@ -1486,6 +1516,24 @@ async function sendFromComposer() {
   delete S.drafts[key];
   delete S.images[key];
   renderAttachments();
+  // Shown before the server answers. Dashed when it waits: in a busy agent's
+  // queue, or in a terminal until Claude reads it.
+  const live = !a && composerState(null, S.view.s).live,
+    sent = {
+      id: Math.random().toString(36).slice(2),
+      text: prompt,
+      images,
+      at: Date.now(),
+      dashed:
+        live ||
+        (!!a && !decline && !prompt.startsWith("!") && RUNNING.includes(a.state)),
+    };
+  sent.note = sent.dashed ? (live ? "Sending…" : "Queued") : "";
+  (S.outbox[key] ||= []).push(sent);
+  const drop = () =>
+    (S.outbox[key] = (S.outbox[key] || []).filter((p) => p !== sent));
+  renderChat();
+  $("#chat-list").scrollTop = $("#chat-list").scrollHeight;
   try {
     if (a) {
       if (decline)
@@ -1504,7 +1552,8 @@ async function sendFromComposer() {
         prompt,
         images,
       });
-      toast("Sent to its terminal");
+      sent.note = "Sent to its terminal, not read yet";
+      renderChat();
     } else {
       const s = S.view.s,
         created = await api("agent", {
@@ -1515,11 +1564,16 @@ async function sendFromComposer() {
           prompt,
           images,
         });
-      if (created.queued)
-        toast(
-          created.busy ? "Queued after the current reply" : "Sent to Codex",
-        );
-      else {
+      if (created.queued) {
+        Object.assign(sent, {
+          dashed: true,
+          note: created.busy
+            ? "Queued after the current reply"
+            : "Sent to Codex, not read yet",
+        });
+        renderChat();
+      } else {
+        drop();
         // The live stream may have added it already.
         if (!S.workspace.agents.some((x) => x.id === created.id))
           S.workspace.agents.unshift(created);
@@ -1532,6 +1586,8 @@ async function sendFromComposer() {
     }
     list.forEach((im) => URL.revokeObjectURL(im.url));
   } catch (e) {
+    drop();
+    renderChat();
     t.value = prompt;
     S.drafts[key] = prompt;
     grow(t);

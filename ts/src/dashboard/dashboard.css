@@ -1574,7 +1574,7 @@ label textarea {
 }
 .msg.queued .bubble {
   background: transparent;
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--line-strong);
   color: var(--secondary);
 }
 .msg-meta {
