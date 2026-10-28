@@ -755,21 +755,28 @@ export class Monitor {
       waiting: "waiting",
       waiting_for_input: "waiting",
     };
+    const shells = new Set<ObservedSession>();
     for (const live of this.liveRecords()) {
       const s = sessions.find(
         (s) => s.profile === live.profile && s.id === live.sessionId,
       );
       if (!s) continue;
       s.state = states[live.status] ?? "unknown";
+      if (live.status === "shell") shells.add(s);
       s.open = true;
       s.tmux = !!live.tmux || undefined;
       s.updatedAt = Math.max(s.updatedAt, live.updatedAt);
     }
     // Once the turn has ended: the agent's own `cfind ask`, else its last paragraph.
+    // A turn that ends on a question waits for the user even while a background
+    // shell still runs; without a question, Claude may go on when the shell ends.
     for (const s of sessions) {
       const f = this.cache[s.path],
-        ask = s.state === "idle" ? (f?.ask ?? askReply(f?.reply)) : undefined;
-      if (ask) s.ask = ask;
+        ended = s.state === "idle" || shells.has(s),
+        ask = ended ? (f?.ask ?? askReply(f?.reply)) : undefined;
+      if (!ask) continue;
+      s.ask = ask;
+      s.state = "idle";
     }
     return {
       updatedAt: this.updatedAt,

@@ -100,11 +100,15 @@ test("sessions show the question once the turn ends, until the user answers", as
       said("answered", text("Done.")),
     );
     claude("busy", user("busy", "check"), said("busy", text("Should I go on?")));
+    // The turn ended, but a background shell still runs.
+    claude("shellask", user("shellask", "check"), said("shellask", text("Done.\n\nYour call: ship it?")));
+    claude("shellplain", user("shellplain", "check"), said("shellplain", text("Started the build.")));
+    const status: Record<string, string> = { busy: "busy", shellask: "shell", shellplain: "shell" };
     mkdirSync(join(home, "sessions"));
-    for (const [i, sid] of ["explicit", "pattern", "plain", "answered", "busy"].entries())
+    for (const [i, sid] of ["explicit", "pattern", "plain", "answered", "busy", "shellask", "shellplain"].entries())
       writeFileSync(
         join(home, "sessions", `${i}.json`),
-        JSON.stringify({ pid: process.pid, sessionId: sid, status: sid === "busy" ? "busy" : "idle" }),
+        JSON.stringify({ pid: process.pid, sessionId: sid, status: status[sid] ?? "idle" }),
       );
     writeFileSync(
       join(roots[1]!.path, "rollout-codex.jsonl"),
@@ -136,6 +140,11 @@ test("sessions show the question once the turn ends, until the user answers", as
     assert.equal(ask("plain"), undefined);
     assert.equal(ask("answered"), undefined);
     assert.equal(ask("busy"), undefined);
+    const state = (id: string) => monitor.snapshot().sessions.find((s) => s.id === id)?.state;
+    assert.equal(ask("shellask"), "Your call: ship it?");
+    assert.equal(state("shellask"), "idle");
+    assert.equal(ask("shellplain"), undefined);
+    assert.equal(state("shellplain"), "running");
     assert.equal(ask("cx"), "Pick A or B?");
     assert.equal(monitor.snapshot().sessions.find((s) => s.id === "explicit")!.state, "idle");
   } finally {
