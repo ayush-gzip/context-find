@@ -102,6 +102,7 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E42 | `GET /api/commands` | folder this profile never ran in → 403 "Unknown folder"; known folders → 200. Claude runs `-p /cost` with hooks and MCP off; no model call. Pass |
 | E43 | unit tests (`test/commands.test.ts`) | descriptions from SKILL.md (folded), project commands, plugin commands; built-in text; `__` names hidden; one probe per folder; failed probe not cached; frontmatter edge cases. 101/101. Pass |
 | E44 | chat stays still while typing (WKWebView, zoom 1 and 1.1, 3-line draft in a live chat, sending stubbed out) | before: the chat slid 20 to 40 px off the bottom on every key and live updates snapped it back. After: distance from the bottom stays 0 on every key; box 26/46/66 px. Pass |
+| E45 | sidebar as a flap over the full-screen chat (replaces E37; Chrome 1512 and 1100 wide) | chat spans the whole window (drawer 0 to full width); the glass sidebar sits on top (hit test at x=100 finds the sidebar); the chat column stays clear of it (composer starts at 336 / 234 px). ⌘B slides it out (visibility hidden after 0.2 s, the column re-centres) and back. No page errors. Mac UI test not re-run: launching it quits the running cfind app. Pass |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"
