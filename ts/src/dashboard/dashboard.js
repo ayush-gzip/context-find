@@ -960,13 +960,13 @@ function chatItems(a, s) {
   (a?.queue || []).forEach((q, i) =>
     items.push({
       key: `q:${i}:${q.text.length}:${q.images?.length || 0}`,
-      html: `<div class="msg user queued">${imagesHtml(q.images)}${q.text ? `<div class="bubble">${md(q.text)}</div>` : ""}<div class="msg-meta"><span>Queued</span><button type="button" class="link-button" data-unqueue="${i}">Remove</button></div></div>`,
+      html: `<div class="msg user queued">${imagesHtml(q.images)}${q.text ? `<div class="bubble">${md(q.text)}</div>` : ""}<div class="msg-meta"><span>Queued</span>${RUNNING.includes(a.state) ? '<button type="button" class="link-button" data-send-now>Send now</button>' : ""}<button type="button" class="link-button" data-unqueue="${i}">Remove</button></div></div>`,
     }),
   );
   for (const p of outbox(a))
     items.push({
       key: "p:" + p.id,
-      html: `<div class="msg user${p.dashed ? " queued" : ""}">${imagesHtml(p.images)}${p.text ? `<div class="bubble">${md(p.text)}</div>` : ""}<div class="msg-meta">${p.note ? `<span>${esc(p.note)}</span>` : `<span>You</span><time>${esc(clock(p.at))}</time>`}</div></div>`,
+      html: `<div class="msg user${p.dashed ? " queued" : ""}">${imagesHtml(p.images)}${p.text ? `<div class="bubble">${md(p.text)}</div>` : ""}<div class="msg-meta">${p.note ? `<span>${esc(p.note)}</span>` : `<span>You</span><time>${esc(clock(p.at))}</time>`}${p.sendNow ? '<button type="button" class="link-button" data-send-now>Send now</button>' : ""}</div></div>`,
     });
   if (a?.error)
     items.push({
@@ -1289,6 +1289,7 @@ function composerState(a, s) {
     return {
       enabled: true,
       live: true,
+      stop: s.state === "running",
       placeholder: idle
         ? `Message ${label} in its terminal…`
         : `Message ${label} while it works…`,
@@ -1615,6 +1616,8 @@ async function sendFromComposer() {
         images,
       });
       sent.note = "Sent to its terminal, not read yet";
+      // Ctrl+X Ctrl+S is Claude's; Codex has no such key.
+      sent.sendNow = s.source === "claude";
       renderChat();
     } else {
       const s = S.view.s,
@@ -1858,7 +1861,28 @@ document.addEventListener("click", async (e) => {
     }
     if (b.hasAttribute("data-cancel")) {
       b.disabled = true;
-      await api("agent", { action: "cancel", id: S.view.id });
+      const s = S.view.kind === "session" ? S.view.s : null;
+      await api(
+        "agent",
+        s
+          ? { action: "live-stop", profile: s.profile, sid: s.id }
+          : { action: "cancel", id: S.view.id },
+      );
+    }
+    // Stops the reply or ! command, so what waits is sent at once.
+    if (b.hasAttribute("data-send-now")) {
+      b.disabled = true;
+      const s = S.view.kind === "session" ? S.view.s : null;
+      await api(
+        "agent",
+        s
+          ? { action: "live-key", key: "send-now", profile: s.profile, sid: s.id }
+          : { action: "send-now", id: S.view.id },
+      );
+      if (s) {
+        (S.outbox[S.chat.key] || []).forEach((p) => delete p.sendNow);
+        renderChat();
+      }
     }
     if (b.dataset.respond) {
       const kind = b.dataset.respond;

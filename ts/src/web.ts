@@ -53,6 +53,7 @@ import {
   procStart,
   queueCodex,
   sendKey,
+  stopPane,
   sendToPane,
   takeOver,
 } from "./live.ts";
@@ -649,6 +650,7 @@ export function createWebServer(
             if (
               data.action === "live-send" ||
               data.action === "live-key" ||
+              data.action === "live-stop" ||
               data.action === "takeover"
             ) {
               const live = terminalOf(String(data.profile), String(data.sid));
@@ -657,6 +659,7 @@ export function createWebServer(
               if (data.action === "takeover") await takeOver(live);
               else if (data.action === "live-key")
                 sendKey(live, String(data.key));
+              else if (data.action === "live-stop") await stopPane(live);
               else if (!said(data.prompt)) throw new Error("Prompt required");
               else
                 await sendToPane(live, withPaths(data.prompt, images), () =>
@@ -694,6 +697,10 @@ export function createWebServer(
             }
             if (data.action === "mode") {
               ok(workspace.setMode(data.id, String(data.mode)));
+              return;
+            }
+            if (data.action === "send-now") {
+              ok(await workspace.sendNow(data.id));
               return;
             }
             if (data.action === "unqueue") {

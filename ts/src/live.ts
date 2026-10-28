@@ -169,12 +169,26 @@ const KEYS = new Set([
   ..."abcdefghijklmnopqrstuvwxyz",
 ]);
 
+// Claude's terminal: Ctrl+X Ctrl+S sends the queued messages now, stopping the
+// reply or the ! command that runs.
+const COMBOS: Record<string, string[]> = { "send-now": ["C-x", "C-s"] };
+
 /** One named key into the pane, such as Down or Enter in a terminal menu. */
 export function sendKey(r: LiveRecord, key: string) {
-  if (!KEYS.has(key)) throw new Error("Unknown key");
+  const keys = COMBOS[key] ?? (KEYS.has(key) ? [key] : undefined);
+  if (!keys) throw new Error("Unknown key");
   if (!r.tmux) throw new Error("This session is not in tmux");
   sameProcess(r);
-  run(checkPane(r), ["send-keys", "-t", r.tmux, key]);
+  run(checkPane(r), ["send-keys", "-t", r.tmux, ...keys]);
+}
+
+/** Esc stops the reply or the ! command. A stopped ! command comes back into the
+ *  input box in shell mode, and the next message would be added to it, so
+ *  Ctrl+U clears the text and Backspace leaves shell mode. */
+export async function stopPane(r: LiveRecord) {
+  sendKey(r, "Escape");
+  await sleep(300);
+  run(checkPane(r), ["send-keys", "-t", r.tmux!, "C-u", "BSpace"]);
 }
 
 export async function takeOver(r: LiveRecord) {

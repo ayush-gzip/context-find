@@ -350,7 +350,8 @@ export class AgentWorkspace {
   private codexModes = new Set<string>();
   /** /model and /effort picks for a Codex agent's next turn; Codex keeps them after. */
   private codexPicks = new Map<string, { model?: string; effort?: string }>();
-  private modeRequests = new Set<string>();
+  /** Control requests in flight, by request id: what each one does. */
+  private controlRequests = new Map<string, string>();
   private saved?: ReturnType<typeof setTimeout>;
   private dirty = false;
   private closed = false;
@@ -797,7 +798,7 @@ export class AgentWorkspace {
     } else if (child) {
       // Claude confirms with a status event, which sets permissionMode.
       const request_id = randomUUID();
-      this.modeRequests.add(request_id);
+      this.controlRequests.set(request_id, "change the mode");
       child.stdin.write(
         JSON.stringify({
           type: "control_request",
@@ -877,6 +878,30 @@ export class AgentWorkspace {
     };
     child.on("error", (e) => done(null, e.message));
     child.on("close", (code) => done(code));
+    return a;
+  }
+  /** Stops the current reply, so the next queued message goes at once. */
+  async sendNow(id: string) {
+    const a = this.get(id);
+    if (!a.queue.length) throw new Error("Nothing is waiting to be sent");
+    if (this.profile(a.profile).source === "codex") {
+      if (!a.sid || !a.turnId) throw new Error("No active Codex reply to stop");
+      // turn/completed then sends the queue.
+      await this.rpc().call("turn/interrupt", { threadId: a.sid, turnId: a.turnId });
+      return a;
+    }
+    const child = this.claude.get(a.id);
+    if (!child) throw new Error("No active Claude reply to stop");
+    // Claude ends the turn with a result event, which sends the queue.
+    const request_id = randomUUID();
+    this.controlRequests.set(request_id, "stop the reply");
+    child.stdin.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id,
+        request: { subtype: "interrupt" },
+      }) + "\n",
+    );
     return a;
   }
   unqueue(id: string, index: number) {
@@ -981,12 +1006,13 @@ export class AgentWorkspace {
                 a.state = "waiting";
               } else if (p.type === "control_response") {
                 const r = p.response,
-                  mode = this.modeRequests.delete(r?.request_id);
+                  what = this.controlRequests.get(r?.request_id);
+                this.controlRequests.delete(r?.request_id);
                 if (r?.subtype === "error")
                   push(
                     a,
                     "note",
-                    `Could not change the ${mode ? "mode" : "model"}: ${String(r.error).slice(0, 300)}`,
+                    `Could not ${what ?? "change the model"}: ${String(r.error).slice(0, 300)}`,
                   );
                 else if (typeof r?.response?.model === "string") {
                   a.model = r.response.model;
