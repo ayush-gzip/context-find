@@ -391,6 +391,7 @@ function overview() {
     ) +
     quotaCards() +
     `<div class="dashboard-grid">${chart()}${activity()}</div>` +
+    `<div class="dashboard-grid">${projectsPanel()}${modelsPanel()}</div>` +
     activeCanvas() +
     `<div class="section-heading"><h2>Recent sessions</h2><button class="button" data-page="sessions">View all sessions ↗</button></div>` +
     sessionsTable(scopedSessions(), false)
@@ -454,6 +455,51 @@ function sessions() {
         "",
       )}</select><button class="button" type="submit">Search full text ↵</button>${S.deepSearch ? '<button class="button" type="button" data-clear-search>Clear</button>' : ""}<span class="muted small">${rows.length} sessions</span></form>${S.remoteErrors.length ? `<div class="warning-banner">${S.remoteErrors.map((e) => esc(e.host + ": " + e.message)).join("<br>")}</div>` : ""}${sessionsTable(rows)}`
   );
+}
+function modelsPanel() {
+  const map = new Map(),
+    cost = reportedCost();
+  for (const u of scopedUsage()) {
+    const key = u.model + "|" + u.profile,
+      v = map.get(key) || { model: u.model, profile: u.profile, total: 0 };
+    v.total += total(u.tokens, u.profile);
+    map.set(key, v);
+  }
+  const models = [...map.values()]
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 7),
+    max = Math.max(1, ...models.map((m) => m.total));
+  return `<div class="panel"><div class="panel-head"><h2 class="panel-title">Models</h2><small>Selected period</small></div><div class="model-list">${models.length ? models.map((m) => `<div class="model-row"><div class="labels"><span>${esc(m.model)} <span class="faint">· ${esc(profileLabel(m.profile))}</span></span><span>${num(m.total)}</span></div><div class="meter" style="--accent:${colors[m.profile] || colors.claude}"><span style="width:${(m.total / max) * 100}%"></span></div></div>`).join("") : empty("No usage records", "Model usage will appear after an agent response.")}</div>${cost === null ? "" : `<div class="chart-caption">Reported API value $${cost.toFixed(2)} · a list-price estimate, not your bill</div>`}</div>`;
+}
+function reportedCost() {
+  const byId = new Map();
+  for (const c of S.metrics?.costs || [])
+    if (inScope(c.profile)) byId.set(c.profile + "|" + c.sessionId, c.value);
+  for (const a of S.workspace.agents)
+    if (inScope(a.profile) && typeof a.estimatedCostUsd === "number")
+      byId.set(a.profile + "|" + a.sid, a.estimatedCostUsd);
+  return byId.size ? [...byId.values()].reduce((a, b) => a + b, 0) : null;
+}
+function scopedUsage() {
+  const start = cutoff();
+  return (S.metrics?.usage || []).filter(
+    (u) => inScope(u.profile) && (!start || u.day >= start),
+  );
+}
+function projectsPanel() {
+  const sessions = scopedSessions(),
+    projects = new Map();
+  for (const u of scopedUsage()) {
+    const p = projects.get(u.cwd) || {
+      tokens: 0,
+      sessions: sessions.filter((s) => s.cwd === u.cwd).length,
+    };
+    p.tokens += total(u.tokens, u.profile);
+    projects.set(u.cwd, p);
+  }
+  const rows = [...projects].sort((a, b) => b[1].tokens - a[1].tokens),
+    shown = S.allProjects ? rows : rows.slice(0, 6);
+  return `<div class="panel"><div class="panel-head"><h2 class="panel-title">Projects</h2><small>Selected period</small></div>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Project</th><th>Sessions</th><th>Tokens</th></tr></thead><tbody>${shown.map(([cwd, p]) => `<tr><td title="${esc(cwd || "")}">${esc(folder(cwd))}</td><td class="numeric">${full(p.sessions)}</td><td class="numeric">${num(p.tokens)}</td></tr>`).join("")}</tbody></table></div>${rows.length > 6 ? `<div class="table-note"><span>${shown.length} of ${rows.length} projects</span><button class="button" data-all-projects>${S.allProjects ? "Show fewer" : "Show all"}</button></div>` : ""}` : empty("No usage records", "Projects appear after an agent response.")}</div>`;
 }
 async function machines() {
   const main = $("#main");
@@ -1371,6 +1417,10 @@ document.addEventListener("click", async (e) => {
         S.metrics?.sessions.find((s) => s.path === b.dataset.path) ||
         S.sessions.find((s) => s.path === b.dataset.path);
       if (s) openSession(s);
+    }
+    if (b.hasAttribute("data-all-projects")) {
+      S.allProjects = !S.allProjects;
+      render();
     }
     if (b.hasAttribute("data-more")) {
       S.limit += 100;

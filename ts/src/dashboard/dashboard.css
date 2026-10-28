@@ -773,6 +773,34 @@ main {
   color: var(--muted);
   line-height: 1.5;
 }
+.model-list {
+  padding: 14px 16px 4px;
+}
+.model-row {
+  margin-bottom: 14px;
+}
+.model-row .labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.model-row .labels > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.model-row .faint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.model-row .meter {
+  height: 3px;
+}
 .activity-panel {
   display: flex;
   flex-direction: column;
