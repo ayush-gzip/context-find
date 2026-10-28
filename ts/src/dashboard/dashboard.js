@@ -1001,12 +1001,15 @@ function outbox(a) {
     flat = (t) => (t || "").replace(/\s+/g, " ").trim();
   return (S.outbox[S.chat.key] = list.filter((p) => {
     // A ! command shows as its command, in a Shell row or <bash-input>.
+    // A /command typed into a terminal is logged as a note: "/effort: Set effort…".
     const want = flat(p.text.replace(/^!/, ""));
     return (
       Date.now() - p.at < 30 * 60 * 1000 &&
       !seen.some(
         (m) =>
-          (m.role === "user" || m.role === "tool") &&
+          (m.role === "user" ||
+            m.role === "tool" ||
+            (m.role === "note" && want.startsWith("/"))) &&
           !(m.time < p.at - 5000) &&
           flat(m.text).includes(want),
       )

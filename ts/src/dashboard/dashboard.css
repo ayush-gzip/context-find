@@ -302,7 +302,11 @@ textarea::placeholder {
   padding-bottom: 30px;
   background: var(--bg);
 }
+/* Pinned, so the page scrolls under it and never under the window buttons. */
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   height: var(--bar);
   padding: 0 28px;
   display: flex;
@@ -1424,6 +1428,17 @@ label textarea {
 }
 .drawer[hidden] {
   display: none;
+}
+/* With a mouse connected, macOS shows the page's scrollbar to the right of an
+   open chat. Hide it; a full-screen chat also stops the page behind it scrolling. */
+html:has(.drawer:not([hidden])) {
+  scrollbar-width: none;
+}
+html:has(.drawer:not([hidden]))::-webkit-scrollbar {
+  display: none;
+}
+html:has(.drawer.full:not([hidden])) {
+  overflow: hidden;
 }
 /* Full screen fills the window beside the sidebar, in a readable centered column. */
 .drawer.full {
