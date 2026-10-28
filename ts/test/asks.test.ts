@@ -41,9 +41,13 @@ test("a final reply asks when its last paragraph does", () => {
     "Why did it fail? The token expired.\n\nI renewed it and the run passed.",
     "Fixed.\n\n```sh\nread -p 'Continue?'\n```",
     "",
+    // Quoted: a label or someone else's words.
+    'Fixed.\n\n- The card now shows "Needs your answer" while a shell runs.\n- Tests pass.',
+    'Done.\n\nThe log said "Should I go on?" twice, and `want me to` is a pattern.',
   ];
   for (const r of plain) assert.equal(askReply(r), undefined, r);
   assert.equal(askReply("Done.\n\nGo with **C**?"), "Go with C?");
+  assert.equal(askReply('Done.\n\nShould I name it "fast"?'), 'Should I name it "fast"?');
   const long = "x ".repeat(200) + "Then it is done. Ship it?";
   assert.equal(askReply(long), "Ship it?");
 });

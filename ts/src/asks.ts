@@ -50,15 +50,19 @@ const ASKING = [
   /\blet me know (which|whether|what|how)\b/i,
 ];
 
+// Quoted words are not the agent asking: a label like "Needs your answer", or
+// someone else's question.
+const asks = (text: string) => {
+  const own = text.replace(/"[^"\n]*"|“[^”\n]*”|`[^`\n]*`/g, "x");
+  return ASKING.some((r) => r.test(own));
+};
+
 /** The asking part of a final reply, when its last paragraph asks the user something. */
 export function askReply(reply: string | undefined): string | undefined {
   const text = reply?.replace(/```[\s\S]*?```/g, "").trim();
   const last = text?.split(/\n\s*\n/).at(-1)?.trim();
-  if (!last || !ASKING.some((r) => r.test(last))) return;
+  if (!last || !asks(last)) return;
   if (last.length <= MAX) return clip(last);
   const sentences = last.split(/(?<=[.!?])\s+/);
-  return clip(
-    [...sentences].reverse().find((s) => ASKING.some((r) => r.test(s))) ??
-      sentences.at(-1)!,
-  );
+  return clip([...sentences].reverse().find(asks) ?? sentences.at(-1)!);
 }
