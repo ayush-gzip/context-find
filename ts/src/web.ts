@@ -38,13 +38,19 @@ import {
 } from "./store.ts";
 import { Search } from "./search.ts";
 import { join } from "node:path";
-import { Monitor, dashboardProfiles, monitorDir } from "./monitor.ts";
+import {
+  Monitor,
+  dashboardProfiles,
+  monitorDir,
+  type LiveRecord,
+} from "./monitor.ts";
 import { AgentWorkspace } from "./agents.ts";
 import { ChatFeeds } from "./chatfeed.ts";
 import { Deltas } from "./delta.ts";
 import {
   capturePane,
   codexHolder,
+  procStart,
   queueCodex,
   sendKey,
   sendToPane,
@@ -144,6 +150,20 @@ export function createWebServer(
   const devices = new Devices();
   // A phone may retry a send after a dropped connection; one clientId runs once.
   const sent = new Map<string, { at: number; value?: unknown }>();
+  // Agents moved to tmux, until Claude records the session itself. It does that
+  // only after a folder trust question, which the terminal view can answer.
+  const started = new Map<string, LiveRecord>();
+  const terminalOf = (profile: string, sid: string) => {
+    const key = `${profile}|${sid}`,
+      real = monitor.live(profile, sid);
+    if (real) started.delete(key);
+    const r = real ?? started.get(key);
+    if (r && !real && procStart(r.pid) !== r.procStart) {
+      started.delete(key);
+      return undefined;
+    }
+    return r;
+  };
   const readJson = async (req: IncomingMessage, max: number) => {
     let body = "";
     for await (const chunk of req) {
@@ -436,7 +456,7 @@ export function createWebServer(
           }
           if (url.pathname === "/api/live-screen") {
             startMonitor();
-            const live = monitor.live(
+            const live = terminalOf(
               url.searchParams.get("profile") ?? "",
               url.searchParams.get("sid") ?? "",
             );
@@ -604,6 +624,8 @@ export function createWebServer(
                 throw new Error(
                   "Open in a Codex window that does not use the background helper. Reply there.",
                 );
+              if (data.sid && terminalOf(String(data.profile), String(data.sid)))
+                throw new Error("This session is open in a terminal");
               if (
                 data.sid &&
                 !holder &&
@@ -629,7 +651,7 @@ export function createWebServer(
               data.action === "live-key" ||
               data.action === "takeover"
             ) {
-              const live = monitor.live(String(data.profile), String(data.sid));
+              const live = terminalOf(String(data.profile), String(data.sid));
               if (!live)
                 throw new Error("This session is not open in a terminal");
               if (data.action === "takeover") await takeOver(live);
@@ -638,7 +660,7 @@ export function createWebServer(
               else if (!said(data.prompt)) throw new Error("Prompt required");
               else
                 await sendToPane(live, withPaths(data.prompt, images), () =>
-                  monitor.live(String(data.profile), String(data.sid)),
+                  terminalOf(String(data.profile), String(data.sid)),
                 );
               ok({ ok: true });
               return;
@@ -653,6 +675,21 @@ export function createWebServer(
             if (data.action === "cancel") {
               await workspace.cancel(data.id);
               ok({ ok: true });
+              return;
+            }
+            if (data.action === "terminal") {
+              const t = await workspace.openInTerminal(data.id);
+              started.set(`${t.profile}|${t.sid}`, {
+                profile: t.profile,
+                sessionId: t.sid,
+                pid: t.pid,
+                procStart: procStart(t.pid),
+                tmux: t.pane,
+                // Starting, or asking whether to trust the folder.
+                status: "waiting",
+                updatedAt: Date.now(),
+              });
+              ok({ profile: t.profile, sid: t.sid });
               return;
             }
             if (data.action === "mode") {

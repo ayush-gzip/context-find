@@ -1264,6 +1264,12 @@ function composerState(a, s) {
       stop: RUNNING.includes(a.state),
     };
   }
+  if (opening(s))
+    return {
+      enabled: false,
+      placeholder: "Starting in a terminal…",
+      hint: "Answer any question in the terminal view above",
+    };
   const idle = s.state === "idle",
     local = !s.host && !s.parent;
   // The server checks who has the file open: the Codex helper, another window, or nobody.
@@ -1334,7 +1340,7 @@ function renderChat() {
   const c = composerState(a, s),
     confirm = S.confirmTakeover === S.chat.key,
     term = !!s && termShown(s);
-  const actions = `<button class="icon-button" data-find aria-label="Find in conversation" title="Find">${icon('<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>')}</button>${s && inTmux(s) ? `<button class="icon-button" data-term aria-pressed="${term}" aria-label="Terminal view" title="Terminal view">${icon('<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5M12.5 14.5h4"/>')}</button>` : ""}${a && !RUNNING.includes(a.state) ? '<button class="button" data-dismiss>Remove card</button>' : ""}${c.takeover ? `<button class="button${confirm ? " light" : ""}" data-takeover>${confirm ? "Stop it in the terminal?" : "Take over"}</button>` : ""}<button class="icon-button" data-chat-size aria-label="${S.chatFull ? "Show as side panel" : "Show full screen"}" title="${S.chatFull ? "Side panel" : "Full screen"}">${icon(S.chatFull ? '<path d="M4 14h6v6m10-10h-6V4m0 6 7-7M3 21l7-7"/>' : '<path d="M14 4h6v6M10 20H4v-6m16-10-7 7M4 20l7-7"/>')}</button><button class="icon-button" data-close-drawer aria-label="Close conversation">×</button>`;
+  const actions = `<button class="icon-button" data-find aria-label="Find in conversation" title="Find">${icon('<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>')}</button>${s && inTmux(s) ? `<button class="icon-button" data-term aria-pressed="${term}" aria-label="Terminal view" title="Terminal view">${icon('<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5M12.5 14.5h4"/>')}</button>` : ""}${a && a.sid && !a.external && agentName(a.profile) === "Claude" && !RUNNING.includes(a.state) ? '<button class="button" data-open-terminal title="Continue this chat in a tmux window. Its terminal shows here.">Open in terminal</button>' : ""}${a && !RUNNING.includes(a.state) ? '<button class="button" data-dismiss>Remove card</button>' : ""}${c.takeover ? `<button class="button${confirm ? " light" : ""}" data-takeover>${confirm ? "Stop it in the terminal?" : "Take over"}</button>` : ""}<button class="icon-button" data-chat-size aria-label="${S.chatFull ? "Show as side panel" : "Show full screen"}" title="${S.chatFull ? "Side panel" : "Full screen"}">${icon(S.chatFull ? '<path d="M4 14h6v6m10-10h-6V4m0 6 7-7M3 21l7-7"/>' : '<path d="M14 4h6v6M10 20H4v-6m16-10-7 7M4 20l7-7"/>')}</button><button class="icon-button" data-close-drawer aria-label="Close conversation">×</button>`;
   if ($("#chat-actions")._html !== actions) {
     $("#chat-actions").innerHTML = actions;
     $("#chat-actions")._html = actions;
@@ -1429,11 +1435,41 @@ const inTmux = (s) => !s.host && !s.parent && s.open && s.tmux;
 /** A tmux session shows its pane while a terminal menu waits, or when asked.
  *  Hiding it lasts until the session's state changes. */
 function termShown(s) {
-  if (!inTmux(s)) return false;
   const t = S.term;
+  if (!inTmux(s)) return opening(s) && (t?.key !== S.chat.key || t.show);
   return t?.key === S.chat.key && t.state === s.state
     ? t.show
     : s.state === "waiting";
+}
+/** A chat just moved to tmux shows its pane before Claude records the session;
+ *  Claude waits for a folder trust answer before it does. */
+function opening(s) {
+  const o = S.opening;
+  if (o?.path !== s.path) return false;
+  if (inTmux(s) || Date.now() > o.until) {
+    S.opening = null;
+    // Keep the pane on screen once the session is live.
+    if (S.term?.key === S.chat.key) S.term.state = s.state;
+  }
+  return !!S.opening;
+}
+/** Moves a Claude agent into a tmux window; the chat follows it there. */
+async function openTerminal() {
+  const a = viewAgent();
+  if (!a) return;
+  const t = await api("agent", { action: "terminal", id: a.id }),
+    s = S.metrics?.sessions.find(
+      (x) => x.profile === t.profile && x.id === t.sid,
+    );
+  S.workspace.agents = S.workspace.agents.filter((x) => x.id !== a.id);
+  if (!s) {
+    closeDrawer();
+    return toast("Opened in the tmux session cfind");
+  }
+  S.opening = { path: s.path, until: Date.now() + 2 * 60 * 1000 };
+  openSession(s);
+  S.term = { key: S.chat.key, state: S.view.s.state, show: true };
+  renderChat();
 }
 function termHtml() {
   const keys = [
@@ -1681,6 +1717,7 @@ document.addEventListener("click", async (e) => {
     if (b.dataset.slash) pickSlash(b.dataset.slash);
     if (b.dataset.termKey) sendTermKey(b.dataset.termKey);
     if (b.hasAttribute("data-mode")) switchMode();
+    if (b.hasAttribute("data-open-terminal")) await openTerminal();
     if (b.hasAttribute("data-term")) {
       S.term = {
         key: S.chat.key,

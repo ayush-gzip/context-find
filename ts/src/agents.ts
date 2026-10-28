@@ -16,6 +16,7 @@ import { claudeCommands, codexCommands } from "./commands.ts";
 import { CodexRPC } from "./codex.ts";
 import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
+import { startInTmux } from "./live.ts";
 
 export interface Message {
   id: string;
@@ -90,6 +91,16 @@ function push(
 }
 const clip = (text: string) =>
   text.length > 8000 ? text.slice(0, 8000) + "\n…" : text;
+/** A tmux server keeps its own PATH, so the terminal gets Claude's full path. */
+function claudeBin() {
+  const name = process.env["CFIND_CLAUDE_BIN"] ?? "claude";
+  if (name.includes("/")) return name;
+  const dirs = [
+    ...(process.env["PATH"] ?? "").split(":"),
+    join(homedir(), ".local", "bin"),
+  ];
+  return dirs.map((d) => join(d, name)).find((p) => existsSync(p)) ?? name;
+}
 const SHELL_MS = 2 * 60 * 1000,
   SHELL_OUTPUT = 30000;
 /** Codex keeps the approval policy on the thread; "untrusted" asks before commands. */
@@ -723,6 +734,55 @@ export class AgentWorkspace {
       );
     else push(a, "note", `Uses ${model} from the next message`);
     this.emit();
+  }
+  /** Moves a Claude agent to an interactive `claude --resume` in tmux, so the
+   *  chat can use its terminal. Only between replies. */
+  async openInTerminal(id: string) {
+    const a = this.get(id);
+    if (this.profile(a.profile).source !== "claude")
+      throw new Error("Only Claude agents open in a terminal");
+    if (
+      ["running", "waiting", "queued"].includes(a.state) ||
+      this.booting.has(a.id)
+    )
+      throw new Error("Wait for the reply to finish");
+    if (!a.sid) throw new Error("This agent has no session yet");
+    const child = this.claude.get(a.id);
+    if (child) {
+      // Removed first, so its exit is not shown as a failure. Two processes must
+      // not write one transcript, so the terminal starts after this one ends.
+      this.claude.delete(a.id);
+      const gone = new Promise((r) => {
+        child.once("close", r);
+        setTimeout(r, 5000).unref();
+      });
+      child.kill("SIGTERM");
+      const hard = setTimeout(() => child.kill("SIGKILL"), 3000);
+      await gone;
+      clearTimeout(hard);
+    }
+    const dir = this.env(a.profile)["CLAUDE_CONFIG_DIR"],
+      started = startInTmux(a.cwd, [
+        "env",
+        ...[
+          "CLAUDECODE",
+          "CLAUDE_CODE_ENTRYPOINT",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_AUTH_TOKEN",
+          ...(dir ? [] : ["CLAUDE_CONFIG_DIR"]),
+        ].flatMap((k) => ["-u", k]),
+        ...(dir ? [`CLAUDE_CONFIG_DIR=${dir}`] : []),
+        claudeBin(),
+        "--resume",
+        a.sid,
+        "--permission-mode",
+        a.permissionMode ?? "manual",
+        ...(a.pickedModel ? ["--model", a.pickedModel] : []),
+      ]);
+    this.shellContext.delete(a.id);
+    this.agents = this.agents.filter((x) => x !== a);
+    this.emit();
+    return { profile: a.profile, sid: a.sid, ...started };
   }
   /** Auto runs commands without asking; manual asks before each one. */
   setMode(id: string, mode: string) {

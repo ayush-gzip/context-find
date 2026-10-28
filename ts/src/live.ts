@@ -36,6 +36,35 @@ function tmuxBin() {
   return found;
 }
 
+/** Starts a command in a new window of the detached tmux session `cfind` on the
+ *  default server; the session is made on first use. tmux runs the arguments
+ *  without a shell. Returns the new pane and its process. */
+export function startInTmux(cwd: string, command: string[]) {
+  const tmux = tmuxBin(),
+    // Not run(): its TZ=UTC would stay in a tmux server that this call starts.
+    start = (args: string[]) =>
+      execFileSync(
+        tmux,
+        [...args, "-P", "-F", "#{pane_id} #{pane_pid}", "-c", cwd, ...command],
+        { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+  let line: string;
+  try {
+    line = start(["new-window", "-d", "-t", "cfind:"]);
+  } catch {
+    try {
+      line = start(["new-session", "-d", "-s", "cfind", "-x", "160", "-y", "45"]);
+    } catch {
+      // Another start made the session in between.
+      line = start(["new-window", "-d", "-t", "cfind:"]);
+    }
+  }
+  const [pane = "", pid = ""] = line.split(" ");
+  if (!/^%\d+$/.test(pane) || !Number(pid))
+    throw new Error("tmux did not start the terminal");
+  return { pane, pid: Number(pid) };
+}
+
 /** Start time in the format Claude records: `ps -o lstart=` in UTC. */
 export const procStart = (pid: number) =>
   quiet("ps", ["-o", "lstart=", "-p", String(pid)]).replace(/\s+/g, " ");
