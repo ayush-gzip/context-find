@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appendFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -217,6 +220,28 @@ test("image uploads accept real images only and serve them back safely", async (
         (await fetch(`${base}/api/upload?t=${token}&id=${bad}`)).status,
         status,
       );
+    // Images go after 7 days, and Settings can clear them all.
+    const dir = join(home, "metrics", "uploads"),
+      old = "a".repeat(32) + ".png";
+    writeFileSync(join(dir, old), png);
+    const week = (Date.now() - 8 * 86400000) / 1000;
+    utimesSync(join(dir, old), week, week);
+    assert.equal((await up(png)).status, 200);
+    assert.ok(!existsSync(join(dir, old)), "an old image is removed");
+    const stats = await (await fetch(`${base}/api/uploads?t=${token}`)).json();
+    assert.deepEqual([stats.count, stats.keepDays], [3, 7]);
+    assert.ok(stats.bytes > 0);
+    const clear = (body: unknown) =>
+      fetch(`${base}/api/uploads?t=${token}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await clear({ action: "other" })).status, 400);
+    assert.deepEqual(await (await clear({ action: "clear" })).json(), {
+      removed: 3,
+    });
+    assert.deepEqual(readdirSync(dir), []);
   } finally {
     server.close();
     for (const [k, v] of Object.entries(prior))

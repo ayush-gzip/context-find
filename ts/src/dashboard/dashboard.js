@@ -35,6 +35,7 @@ const S = {
   // Agents whose subagents the user unfolded.
   openKids: new Set(),
   phones: { devices: [] },
+  uploads: null,
   pairing: null,
   login: null,
   limit: 100,
@@ -562,7 +563,7 @@ function settings() {
         const a = S.accounts.find((a) => a.profile === p.id);
         return `<div class="panel connection-card" style="--accent:${colors[p.id] || colors.claude}"><span class="source-logo">${p.source === "codex" ? "◎" : "✳"}</span><h3>${esc(p.label)}</h3><p>${esc(p.path)}</p><div class="connection-state ${a?.connected ? "" : "off"}"><i class="online-dot" style="background:${a?.connected ? "#b4dec0" : "#ac9a73"}"></i> ${a ? (a.connected ? "Connected" + (a.plan ? " · " + esc(a.plan) : "") : "Not connected") : "Checking connection…"}</div><button class="button" data-login="${esc(p.id)}">${a?.connected ? "Sign in again" : "Sign in with " + (p.source === "codex" ? "ChatGPT" : "Claude")} ↗</button>${a?.error ? `<p class="error">${esc(a.error)}</p>` : ""}</div>`;
       })
-      .join("")}</div>${phonePanel()}<div class="panel info-panel"><h3>A small service, on your machine.</h3>Collection continues when this tab is closed if the background service is installed. Metrics and workspace state are stored in <code>~/.context-find/dashboard</code>. Credentials stay in the installed tools.<p>Manage the collector with <code>cfind daemon status</code>, <code>cfind daemon start</code>, or <code>cfind daemon stop</code>. <code>cfind</code> on its own starts it.</p><p>Claude quota telemetry requires a terminal session with the collector status line. Restart existing Claude sessions after setup to load new hooks. Missing telemetry is shown as unavailable.</p></div>`
+      .join("")}</div>${phonePanel()}${uploadsPanel()}<div class="panel info-panel"><h3>A small service, on your machine.</h3>Collection continues when this tab is closed if the background service is installed. Metrics and workspace state are stored in <code>~/.context-find/dashboard</code>. Credentials stay in the installed tools.<p>Manage the collector with <code>cfind daemon status</code>, <code>cfind daemon start</code>, or <code>cfind daemon stop</code>. <code>cfind</code> on its own starts it.</p><p>Claude quota telemetry requires a terminal session with the collector status line. Restart existing Claude sessions after setup to load new hooks. Missing telemetry is shown as unavailable.</p></div>`
   );
 }
 function phonePanel() {
@@ -584,6 +585,18 @@ function phonePanel() {
       ? `<div class="device-list">${S.phones.devices.map((d) => `<div class="device-row"><span>${esc(d.name)}</span><small>Paired ${esc(new Date(d.created).toLocaleDateString())} · Last seen ${esc(age(d.seen))}</small><button class="button" data-revoke-device="${esc(d.id)}">Revoke</button></div>`).join("")}</div>`
       : ""
   }</div>`;
+}
+function uploadsPanel() {
+  const u = S.uploads;
+  return `<div class="panel phone-panel"><div class="phone-head"><div><h3>Attached images</h3><p>Images you attach to a chat are kept for ${u?.keepDays ?? 7} days, then removed.${u ? ` ${full(u.count)} now, ${(u.bytes / 1048576).toFixed(1)} MB.` : ""}</p></div><button class="button" data-clear-uploads ${u?.count ? "" : "disabled"}>Clear now</button></div></div>`;
+}
+async function uploads() {
+  try {
+    S.uploads = await api("uploads");
+    render();
+  } catch (e) {
+    toast(e.message);
+  }
 }
 async function phones() {
   try {
@@ -608,13 +621,21 @@ function render() {
     ({ overview, workspace, sessions, settings }[S.page] || overview)();
   window.scrollTo(0, scroll);
 }
-function navigate(page) {
+/** `fromHistory`: back or forward already chose the page and the chat. */
+function navigate(page, fromHistory) {
   // A full-screen chat would hide the section, so it closes.
-  if (S.view && S.chatFull) closeDrawer();
+  if (S.view && S.chatFull && !fromHistory) closeDrawer();
   if (page !== "sessions") S.project = "all";
   if (!labels[page]) page = "overview";
   S.page = page;
-  location.hash = page;
+  // pushState, not location.hash: a hash change would also send popstate, which
+  // closes the chat. The step remembers a side-panel chat that stays open.
+  if (location.hash !== "#" + page)
+    history[fromHistory ? "replaceState" : "pushState"](
+      S.view ? { chat: chatState() } : null,
+      "",
+      "#" + page,
+    );
   $("#page-label").textContent = labels[page];
   $$(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.page === page),
@@ -625,6 +646,7 @@ function navigate(page) {
   if (page === "settings") {
     void accounts();
     void phones();
+    void uploads();
   }
 }
 async function accounts() {
@@ -670,6 +692,34 @@ function viewAgent() {
     ? S.workspace.agents.find((a) => a.id === S.view.id)
     : null;
 }
+/** Each chat opened or closed is a step that back and forward walk through,
+ *  also with the mouse's side buttons. */
+function chatState() {
+  const v = S.view;
+  return v.kind === "agent"
+    ? { key: viewKey(), kind: "agent", id: v.id }
+    : { key: viewKey(), kind: "session", path: v.s.path, host: v.s.host || "" };
+}
+let restoring = false;
+window.addEventListener("popstate", (e) => {
+  const c = e.state?.chat;
+  if (c?.key === viewKey()) return;
+  restoring = true;
+  try {
+    if (c?.kind === "session")
+      openSession({ path: c.path, host: c.host || undefined });
+    else if (c && S.workspace.agents.some((a) => a.id === c.id))
+      openView({ kind: "agent", id: c.id });
+    else if (S.view) closeDrawer();
+  } finally {
+    restoring = false;
+  }
+});
+/** Closing by hand is a step, so back opens the chat again. */
+function leaveChat() {
+  closeDrawer();
+  history.pushState(null, "");
+}
 function closeDrawer() {
   S.view = null;
   S.chat = null;
@@ -707,6 +757,9 @@ window.cfindOpen = (kind, id) =>
 function openView(view) {
   S.view = view;
   S.chat = { key: viewKey(), history: [], omitted: 0, loading: true };
+  if (restoring) history.replaceState({ chat: chatState() }, "");
+  else if (history.state?.chat?.key !== S.chat.key)
+    history.pushState({ chat: chatState() }, "");
   tellApp();
   // Esc makes one chat smaller; the next chat opens at the saved size.
   S.chatFull = localStorage.getItem("cfind-chat-size") !== "panel";
@@ -1378,6 +1431,7 @@ async function sendFromComposer() {
           S.workspace.agents.unshift(created);
         S.view = { kind: "agent", id: created.id };
         S.chat.key = viewKey();
+        history.replaceState({ chat: chatState() }, "");
         tellApp();
         renderChat();
       }
@@ -1468,7 +1522,7 @@ document.addEventListener("click", async (e) => {
       $("#login-dialog").close();
       S.login = null;
     }
-    if (b.hasAttribute("data-close-drawer")) closeDrawer();
+    if (b.hasAttribute("data-close-drawer")) leaveChat();
     if (b.hasAttribute("data-chat-size")) {
       S.chatFull = !S.chatFull;
       localStorage.setItem("cfind-chat-size", S.chatFull ? "full" : "panel");
@@ -1584,6 +1638,8 @@ document.addEventListener("click", async (e) => {
     if (b.hasAttribute("data-dismiss")) {
       await api("agent", { action: "dismiss", id: S.view.id });
       closeDrawer();
+      // The card is gone, so its step is too.
+      history.replaceState(null, "");
     }
     if (b.hasAttribute("data-cancel")) {
       b.disabled = true;
@@ -1616,6 +1672,12 @@ document.addEventListener("click", async (e) => {
       await api("devices", { action: "revoke", id: b.dataset.revokeDevice });
       await phones();
       toast("iPhone removed");
+    }
+    if (b.hasAttribute("data-clear-uploads")) {
+      b.disabled = true;
+      const { removed } = await api("uploads", { action: "clear" });
+      await uploads();
+      toast(`${removed} image${removed === 1 ? "" : "s"} removed`);
     }
     if (
       b.hasAttribute("data-accounts-refresh") ||
@@ -1922,7 +1984,7 @@ document.addEventListener("keydown", (e) => {
       S.chatFull = false;
       $("#drawer").classList.remove("full");
       renderChat();
-    } else closeDrawer();
+    } else if (S.view) leaveChat();
   }
   if (
     e.key === "Enter" &&
@@ -1946,7 +2008,7 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("hashchange", () => {
   const p = location.hash.slice(1);
-  if (p !== S.page) navigate(p);
+  if (p !== S.page) navigate(p, true);
 });
 setInterval(() => {
   $("#clock").textContent = new Date().toLocaleTimeString([], {

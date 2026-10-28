@@ -53,9 +53,11 @@ import {
 import { Devices, tailscaleHost } from "./devices.ts";
 import {
   MAX_UPLOAD,
+  pruneUploads,
   saveUpload,
   uploadIds,
   uploadPath,
+  uploadStats,
   uploadType,
   withPaths,
 } from "./uploads.ts";
@@ -206,6 +208,10 @@ export function createWebServer(
       peer.write(": heartbeat\n\n");
   }, 15000);
   heartbeat.unref();
+  // Old attached images go even when nothing new is attached.
+  pruneUploads();
+  const prune = setInterval(() => pruneUploads(), 24 * 3600 * 1000);
+  prune.unref();
   const localRoots = [...profiles.map((p) => p.path)].map((r) => resolve(r));
   /** Canonical transcript path, or the refusal for a path outside the stores. */
   const containedTranscript = (path: string): string | [number, string] => {
@@ -485,6 +491,27 @@ export function createWebServer(
             createReadStream(path).pipe(res);
             return;
           }
+          if (url.pathname === "/api/uploads") {
+            if (req.method === "POST") {
+              const data = await readJson(req, 1024);
+              if (data.action !== "clear") {
+                json(res, 400, { error: "Unknown action" });
+                return;
+              }
+              // Messages still waiting to be sent keep their images.
+              const keep = new Set(
+                workspace
+                  .snapshot()
+                  .agents.flatMap((a) =>
+                    a.queue.flatMap((q) => q.images ?? []),
+                  ),
+              );
+              json(res, 200, { removed: pruneUploads(true, keep) });
+              return;
+            }
+            json(res, 200, uploadStats());
+            return;
+          }
           if (url.pathname === "/api/agent" || url.pathname === "/api/login") {
             if (
               req.method !== "POST" ||
@@ -755,6 +782,7 @@ export function createWebServer(
 
   server.on("close", () => {
     clearInterval(heartbeat);
+    clearInterval(prune);
     monitor.stop();
     workspace.close();
   });
