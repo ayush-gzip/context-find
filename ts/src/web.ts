@@ -577,6 +577,8 @@ export function createWebServer(
             if (data.action === "create") {
               if (!said(data.prompt) || typeof data.cwd !== "string")
                 throw new Error("Project folder and prompt required");
+              if (data.prompt.trim().startsWith("!"))
+                throw new Error("Send a message first, then use ! to run a command");
               // An external live process cannot be safely attached by resuming it a second time.
               const session = data.sid
                 ? monitor
@@ -651,6 +653,10 @@ export function createWebServer(
             if (data.action === "cancel") {
               await workspace.cancel(data.id);
               ok({ ok: true });
+              return;
+            }
+            if (data.action === "mode") {
+              ok(workspace.setMode(data.id, String(data.mode)));
               return;
             }
             if (data.action === "unqueue") {

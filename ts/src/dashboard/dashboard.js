@@ -790,7 +790,7 @@ function openView(view) {
   const drawer = $("#drawer");
   drawer.hidden = false;
   drawer.classList.toggle("full", S.chatFull);
-  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-images" id="composer-images" hidden></div><div class="composer-box"><div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><span id="composer-buttons"></span></div><div class="composer-footer" id="composer-hint"></div></form>`;
+  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-images" id="composer-images" hidden></div><div class="composer-box"><div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><span id="composer-buttons"></span></div><div class="composer-footer"><button type="button" class="mode-button" data-mode hidden></button><span id="composer-hint"></span></div></form>`;
   $("#agent-prompt").value = S.drafts[S.chat.key] || "";
   grow($("#agent-prompt"));
   renderAttachments();
@@ -1320,7 +1320,22 @@ function renderChat() {
   const t = $("#agent-prompt");
   t.disabled = !c.enabled;
   t.placeholder = c.placeholder;
-  $("#composer-hint").textContent = c.hint;
+  const hint = $("#composer-hint"),
+    mode = $("[data-mode]"),
+    auto = a?.permissionMode === "auto";
+  hint.dataset.hint = c.hint;
+  hint.dataset.shell = !c.enabled
+    ? ""
+    : a
+      ? `Runs in ${folder(a.cwd)} · ${agentName(a.profile)} sees the output with your next message`
+      : c.live
+        ? "Its terminal runs this as a command"
+        : "";
+  shellMode();
+  mode.hidden = !a || !c.enabled;
+  mode.textContent = auto ? "Auto" : "Ask first";
+  mode.classList.toggle("on", auto);
+  mode.title = `${auto ? "Runs commands without asking" : "Asks before each command"} · Shift+Tab to switch`;
   $("[data-attach]").hidden = !c.enabled;
   const buttons = `${c.stop ? `<button type="button" class="round-button stop" data-cancel aria-label="Stop" title="Stop">${icon('<rect x="7" y="7" width="10" height="10" rx="2"/>')}</button>` : ""}${c.enabled ? `<button type="submit" class="round-button send" aria-label="Send" title="Send">${icon('<path d="M12 19V5m-6 6 6-6 6 6"/>')}</button>` : ""}`;
   if ($("#composer-buttons")._html !== buttons) {
@@ -1328,6 +1343,31 @@ function renderChat() {
     $("#composer-buttons")._html = buttons;
   }
   drawer.classList.toggle("read-only", !c.enabled);
+}
+/** A message that starts with ! runs as a command in the agent's folder. */
+function shellMode() {
+  const hint = $("#composer-hint"),
+    on = !!hint.dataset.shell && $("#agent-prompt").value.startsWith("!");
+  $("#agent-form").classList.toggle("shell", on);
+  hint.textContent = on ? hint.dataset.shell : hint.dataset.hint;
+}
+/** Shift+Tab, as in the terminal: switches between Auto and Ask first. */
+function switchMode() {
+  const a = viewAgent();
+  if (a) {
+    api("agent", {
+      action: "mode",
+      id: a.id,
+      mode: a.permissionMode === "auto" ? "manual" : "auto",
+    }).catch((e) => toast(e.message));
+    return true;
+  }
+  if (S.view?.kind === "session" && composerState(null, S.view.s).live) {
+    sendTermKey("BTab");
+    toast("Switched mode in its terminal");
+    return true;
+  }
+  return false;
 }
 const inTmux = (s) => !s.host && !s.parent && s.open && s.tmux;
 /** A tmux session shows its pane while a terminal menu waits, or when asked.
@@ -1435,12 +1475,14 @@ async function sendFromComposer() {
   if (!images.every(Boolean)) return toast("Wait for the images to upload");
   const a = viewAgent(),
     decline =
+      !prompt.startsWith("!") &&
       a?.pending?.method === "can_use_tool" &&
       a.pending.params?.tool_name !== "AskUserQuestion";
   if (decline && images.length)
     return toast("Answer the request first, then send images");
   t.value = "";
   grow(t);
+  shellMode();
   delete S.drafts[key];
   delete S.images[key];
   renderAttachments();
@@ -1493,6 +1535,7 @@ async function sendFromComposer() {
     t.value = prompt;
     S.drafts[key] = prompt;
     grow(t);
+    shellMode();
     if (list.length) {
       S.images[key] = list;
       renderAttachments();
@@ -1555,6 +1598,7 @@ document.addEventListener("click", async (e) => {
     if (b.dataset.page) navigate(b.dataset.page);
     if (b.dataset.slash) pickSlash(b.dataset.slash);
     if (b.dataset.termKey) sendTermKey(b.dataset.termKey);
+    if (b.hasAttribute("data-mode")) switchMode();
     if (b.hasAttribute("data-term")) {
       S.term = {
         key: S.chat.key,
@@ -1806,6 +1850,7 @@ document.addEventListener("input", (e) => {
     S.drafts[S.chat.key] = e.target.value;
     grow(e.target);
     slashMenu();
+    shellMode();
   }
   if (e.target.matches("[data-other]")) {
     const ready = $('[data-respond="answer"]');
@@ -2011,6 +2056,14 @@ document.addEventListener("focusout", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (slashKey(e) || termKeyDown(e)) return;
+  if (
+    e.key === "Tab" &&
+    e.shiftKey &&
+    !e.isComposing &&
+    e.target.id === "agent-prompt" &&
+    switchMode()
+  )
+    return e.preventDefault();
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     openPalette();

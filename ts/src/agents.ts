@@ -90,6 +90,16 @@ function push(
 }
 const clip = (text: string) =>
   text.length > 8000 ? text.slice(0, 8000) + "\n…" : text;
+const SHELL_MS = 2 * 60 * 1000,
+  SHELL_OUTPUT = 30000;
+/** Codex keeps the approval policy on the thread; "untrusted" asks before commands. */
+const codexMode = (policy: unknown): Agent["permissionMode"] =>
+  policy === "untrusted" ? "manual" : "auto";
+const codexPolicy = (a: Agent) =>
+  a.permissionMode === "manual" ? "untrusted" : "on-request";
+// Claude's own terminal escapes these in `!` output.
+const escapeTags = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function pushTool(
   a: Agent,
   id: string,
@@ -157,7 +167,9 @@ export function applyCodexEvent(a: Agent, method: string, p: any) {
         a,
         i.id,
         "Shell",
-        i.command ?? "Running command",
+        i.source === "userShell"
+          ? "! " + (i.commandActions?.[0]?.command ?? i.command)
+          : (i.command ?? "Running command"),
         i.command ?? "",
       );
       if (method === "item/completed")
@@ -235,6 +247,9 @@ export function applyClaudeEvent(a: Agent, p: any) {
     a.model = p.model;
     a.state = "running";
   }
+  // Claude reports its mode at start and after each change, also when it leaves auto by itself.
+  if (p.type === "system" && typeof p.permissionMode === "string")
+    a.permissionMode = p.permissionMode === "auto" ? "auto" : "manual";
   if (p.type === "stream_event") {
     const e = p.event;
     if (e?.type === "message_start")
@@ -316,6 +331,13 @@ export class AgentWorkspace {
     { child: ChildProcessWithoutNullStreams; output: string; state: string }
   >();
   private booting = new Set<string>();
+  /** `!` output that Claude reads with the next message, as in its terminal.
+   *  Kept in the order the commands were typed; text is set when one ends. */
+  private shellContext = new Map<string, { text?: string }[]>();
+  private shells = new Set<ChildProcessWithoutNullStreams>();
+  /** Codex agents whose next turn carries a changed approval policy. */
+  private codexModes = new Set<string>();
+  private modeRequests = new Set<string>();
   private saved?: ReturnType<typeof setTimeout>;
   private dirty = false;
   private closed = false;
@@ -428,6 +450,7 @@ export class AgentWorkspace {
       const r = await rpc.call("thread/resume", { threadId: a.sid, excludeTurns: true });
       a.model = r.model;
       a.effort = r.reasoningEffort;
+      if (!this.codexModes.has(a.id)) a.permissionMode = codexMode(r.approvalPolicy);
       if (r.thread.recencyAt || r.thread.updatedAt)
         a.updatedAt = (r.thread.recencyAt || r.thread.updatedAt) * 1000;
       const status = r.thread.status;
@@ -621,6 +644,10 @@ export class AgentWorkspace {
   }
   async send(id: string, prompt: string, images: string[] = []) {
     const a = this.get(id);
+    if (prompt.trim().startsWith("!")) {
+      if (images.length) throw new Error("Send commands without image attachments");
+      return this.shell(a, prompt.trim().slice(1).trim());
+    }
     let queued: QueueItem = { text: prompt, images };
     if (this.profile(a.profile).source === "codex" && prompt.trim().startsWith("/")) {
       if (images.length) throw new Error("Send commands without image attachments");
@@ -695,6 +722,101 @@ export class AgentWorkspace {
     else push(a, "note", `Uses ${model} from the next message`);
     this.emit();
   }
+  /** Auto runs commands without asking; manual asks before each one. */
+  setMode(id: string, mode: string) {
+    const a = this.get(id);
+    if (mode !== "auto" && mode !== "manual") throw new Error("Unknown mode");
+    const child = this.claude.get(a.id);
+    if (this.profile(a.profile).source === "codex") {
+      a.permissionMode = mode;
+      this.codexModes.add(a.id);
+      if (["running", "waiting"].includes(a.state))
+        push(a, "note", "The new mode starts with the next message");
+    } else if (child) {
+      // Claude confirms with a status event, which sets permissionMode.
+      const request_id = randomUUID();
+      this.modeRequests.add(request_id);
+      child.stdin.write(
+        JSON.stringify({
+          type: "control_request",
+          request_id,
+          request: {
+            subtype: "set_permission_mode",
+            mode: mode === "auto" ? "auto" : "default",
+          },
+        }) + "\n",
+      );
+    } else a.permissionMode = mode;
+    this.emit();
+    return a;
+  }
+  /** `! command` in the agent's folder. Codex records it in its thread; Claude
+   *  gets the output with the next message, the way its terminal does it. */
+  private async shell(a: Agent, command: string) {
+    if (!command) throw new Error("Type a command after !");
+    if (this.profile(a.profile).source === "codex") {
+      if (!a.sid) throw new Error("Codex is still starting. Try this command again.");
+      await this.joinCodex(a);
+      await this.rpc().call("thread/shellCommand", {
+        threadId: a.sid,
+        command,
+        timeoutMs: SHELL_MS,
+      });
+      return a;
+    }
+    const id = randomUUID();
+    pushTool(a, id, "Shell", "! " + command, command);
+    a.updatedAt = Date.now();
+    this.emit();
+    const child = spawn(process.env["SHELL"] || "/bin/zsh", ["-lc", command], {
+      cwd: a.cwd,
+      env: this.env(a.profile),
+      // Its own process group, so a timeout also stops what the command started.
+      detached: true,
+    });
+    child.stdin.end();
+    this.shells.add(child);
+    const entry: { text?: string } = {};
+    this.shellContext.set(a.id, [...(this.shellContext.get(a.id) ?? []), entry]);
+    let stdout = "",
+      stderr = "",
+      timedOut = false;
+    const collect = (d: Buffer, old: string) =>
+      old.length >= SHELL_OUTPUT ? old : (old + d.toString()).slice(0, SHELL_OUTPUT);
+    child.stdout.on("data", (d) => (stdout = collect(d, stdout)));
+    child.stderr.on("data", (d) => (stderr = collect(d, stderr)));
+    const stop = () => {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {}
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
+    }, SHELL_MS);
+    const done = (code: number | null, error?: string) => {
+      clearTimeout(timer);
+      if (!this.shells.delete(child)) return;
+      if (error) stderr += error;
+      if (timedOut) stderr += "\nStopped after 2 minutes";
+      toolOutput(
+        a,
+        id,
+        [stdout, stderr].filter(Boolean).join("\n") || "(no output)",
+        code !== 0,
+      );
+      entry.text =
+        `<bash-input>${escapeTags(command)}</bash-input>\n` +
+        (stdout || stderr
+          ? `<bash-stdout>${escapeTags(stdout)}</bash-stdout><bash-stderr>${escapeTags(stderr)}</bash-stderr>`
+          : "<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>");
+      a.updatedAt = Date.now();
+      this.emit();
+    };
+    child.on("error", (e) => done(null, e.message));
+    child.on("close", (code) => done(code));
+    return a;
+  }
   unqueue(id: string, index: number) {
     const a = this.get(id);
     if (!(index >= 0 && index < a.queue.length))
@@ -729,12 +851,13 @@ export class AgentWorkspace {
         if (!a.sid) {
           const r = await rpc.call("thread/start", {
             cwd: a.cwd,
-            approvalPolicy: "on-request",
+            approvalPolicy: codexPolicy(a),
             approvalsReviewer: "user",
             sandbox: "workspace-write",
           });
           a.sid = r.thread.id;
           a.model = r.model;
+          this.codexModes.delete(a.id);
           this.joined.add(a.id);
         } else
           await this.joinCodex(a);
@@ -751,7 +874,10 @@ export class AgentWorkspace {
               path: uploadPath(id),
             })),
           ],
+          // Codex keeps this policy for later turns, so it is sent once per change.
+          ...(this.codexModes.has(a.id) ? { approvalPolicy: codexPolicy(a) } : {}),
         });
+        this.codexModes.delete(a.id);
         a.turnId = r.turn.id;
       } else {
         let child = this.claude.get(a.id);
@@ -790,12 +916,13 @@ export class AgentWorkspace {
                 };
                 a.state = "waiting";
               } else if (p.type === "control_response") {
-                const r = p.response;
+                const r = p.response,
+                  mode = this.modeRequests.delete(r?.request_id);
                 if (r?.subtype === "error")
                   push(
                     a,
                     "note",
-                    `Could not change the model: ${String(r.error).slice(0, 300)}`,
+                    `Could not change the ${mode ? "mode" : "model"}: ${String(r.error).slice(0, 300)}`,
                   );
                 else if (typeof r?.response?.model === "string") {
                   a.model = r.response.model;
@@ -830,6 +957,14 @@ export class AgentWorkspace {
             failed(stderr || `Claude exited (${code})`);
           });
         }
+        // Commands still running go with a later message.
+        const context = this.shellContext.get(a.id) ?? [],
+          running = context.filter((c) => c.text === undefined);
+        if (running.length) this.shellContext.set(a.id, running);
+        else this.shellContext.delete(a.id);
+        const text = [...context.map((c) => c.text), prompt.trim() ? prompt : ""]
+          .filter(Boolean)
+          .join("\n\n");
         child.stdin.write(
           JSON.stringify({
             type: "user",
@@ -845,9 +980,9 @@ export class AgentWorkspace {
                         data: readFileSync(uploadPath(id)).toString("base64"),
                       },
                     })),
-                    ...(prompt.trim() ? [{ type: "text", text: prompt }] : []),
+                    ...(text ? [{ type: "text", text }] : []),
                   ]
-                : prompt,
+                : text,
             },
             session_id: a.sid ?? "",
             parent_tool_use_id: null,
@@ -996,6 +1131,11 @@ export class AgentWorkspace {
     if (this.dirty) this.persist();
     this.codex?.close();
     for (const c of this.claude.values()) c.kill();
+    for (const c of this.shells) {
+      try {
+        process.kill(-c.pid!, "SIGKILL");
+      } catch {}
+    }
     for (const l of this.logins.values()) l.child.kill();
   }
 }

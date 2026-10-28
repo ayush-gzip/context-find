@@ -2049,9 +2049,37 @@ label textarea {
   line-height: 1;
 }
 .composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 6px 10px 0;
   font-size: 11px;
   color: var(--muted);
+}
+.mode-button {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.mode-button[hidden] {
+  display: none;
+}
+.mode-button.on {
+  border-color: #e6a23c99;
+  background: #e6a23c1f;
+  color: var(--text);
+}
+.composer.shell .composer-box {
+  border-color: #e6a23c;
+  box-shadow: 0 0 0 2px #e6a23c26;
+}
+.composer.shell textarea {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 .drawer.read-only .composer-box {
   opacity: 0.55;

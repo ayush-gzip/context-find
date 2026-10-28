@@ -531,3 +531,177 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+test("Shift+Tab mode and ! commands on a Claude agent", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-claude-mode-")),
+    binary = join(dir, "claude"),
+    prior = process.env.CFIND_CLAUDE_BIN;
+  // Replies like Claude 2.1: a status event after each mode change; the third change fails.
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env node
+const send=o=>console.log(JSON.stringify(o)),args=process.argv.slice(2);
+let mode=args[args.indexOf('--permission-mode')+1],changes=0;
+if(mode==='manual')mode='default';
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line);
+ if(m.type==='user'){
+  send({type:'system',subtype:'init',session_id:'s',model:'opus',permissionMode:mode});
+  send({type:'assistant',message:{id:'r'+Math.random(),content:[{type:'text',text:'GOT '+JSON.stringify(m.message.content)}]}});
+  send({type:'result',subtype:'success',result:'done'});
+ }
+ if(m.type==='control_request'&&m.request.subtype==='set_permission_mode'){
+  if(++changes===3)return send({type:'control_response',response:{subtype:'error',request_id:m.request_id,error:'Auto mode is unavailable',error_code:'auto_mode_unavailable'}});
+  mode=m.request.mode;
+  send({type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{mode}}});
+  send({type:'system',subtype:'status',status:null,permissionMode:mode});
+ }
+});`,
+    { mode: 0o700 },
+  );
+  process.env.CFIND_CLAUDE_BIN = binary;
+  const w = new AgentWorkspace(
+    [{ id: "claude", source: "claude", label: "Claude", path: dir }],
+    join(dir, "data"),
+  );
+  const until = async (check: () => boolean) => {
+    const end = Date.now() + 5000;
+    while (!check()) {
+      if (Date.now() > end) throw new Error("Condition timed out");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  const got = (a: { messages: { text: string }[] }) =>
+    a.messages.filter((m) => m.text.startsWith("GOT ")).map((m) => JSON.parse(m.text.slice(4)));
+  try {
+    const a = await w.create("claude", dir, "first");
+    await until(() => a.state === "idle");
+    assert.equal(a.permissionMode, "auto");
+    w.setMode(a.id, "manual");
+    await until(() => a.permissionMode === "manual");
+    w.setMode(a.id, "auto");
+    await until(() => a.permissionMode === "auto");
+    w.setMode(a.id, "manual");
+    await until(() => a.messages.some((m) => m.role === "note"));
+    assert.equal(a.permissionMode, "auto");
+    assert.equal(a.messages.at(-1)!.text, "Could not change the mode: Auto mode is unavailable");
+    assert.throws(() => w.setMode(a.id, "plan"), /Unknown mode/);
+
+    // The slow first command still comes first: the order typed, not the order finished.
+    await w.send(a.id, "! sleep 0.3; echo hi && echo 'a<b' >&2");
+    await w.send(a.id, "!true");
+    await w.send(a.id, "! head -c 40000 /dev/zero | tr '\\0' x");
+    await until(() => a.messages.filter((m) => m.tool?.output !== undefined).length === 3);
+    const shells = a.messages.filter((m) => m.tool?.name === "Shell");
+    assert.deepEqual(shells.map((m) => m.text), [
+      "! sleep 0.3; echo hi && echo 'a<b' >&2",
+      "! true",
+      "! head -c 40000 /dev/zero | tr '\\0' x",
+    ]);
+    assert.equal(shells[0]!.tool!.output, "hi\n\na<b\n");
+    assert.equal(shells[1]!.tool!.output, "(no output)");
+    await assert.rejects(w.send(a.id, "!  "), /Type a command after !/);
+    await assert.rejects(w.send(a.id, "! ls", ["x"]), /without image attachments/);
+
+    await w.send(a.id, "next");
+    await until(() => got(a).length === 2);
+    const text: string = got(a)[1];
+    const parts = text.split("\n\n");
+    assert.deepEqual(parts.slice(0, 2), [
+      "<bash-input>sleep 0.3; echo hi &amp;&amp; echo 'a&lt;b' &gt;&amp;2</bash-input>\n<bash-stdout>hi\n</bash-stdout><bash-stderr>a&lt;b\n</bash-stderr>",
+      "<bash-input>true</bash-input>\n<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>",
+    ]);
+    assert.ok(parts[2]!.includes("x".repeat(30000) + "</bash-stdout>"));
+    assert.ok(text.endsWith("\n\nnext"));
+    assert.equal(a.messages.filter((m) => m.role === "user").at(-1)!.text, "next");
+
+    // A command still running goes with a later message.
+    await w.send(a.id, "! sleep 0.4; echo late");
+    await w.send(a.id, "now");
+    await until(() => got(a).length === 3);
+    assert.equal(got(a)[2], "now");
+    await until(() => a.messages.some((m) => m.tool?.output === "late\n"));
+    await w.send(a.id, "later");
+    await until(() => got(a).length === 4);
+    assert.ok(got(a)[3].startsWith("<bash-input>sleep 0.4; echo late</bash-input>"));
+    assert.ok(got(a)[3].endsWith("\n\nlater"));
+
+    // Without a running Claude, the mode waits for the next start.
+    await w.cancel(a.id);
+    w.setMode(a.id, "manual");
+    assert.equal(a.permissionMode, "manual");
+    await w.send(a.id, "again");
+    await until(() => a.state === "idle" && got(a).length === 5);
+    assert.equal(a.permissionMode, "manual");
+    assert.equal(got(a)[4], "again");
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;
+    else process.env.CFIND_CLAUDE_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("Codex mode changes set the approval policy once and ! uses its shell command", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-codex-mode-")),
+    prior = process.env.CFIND_CODEX_BIN;
+  writeFileSync(
+    join(dir, "codex"),
+    `#!/usr/bin/env node
+const send=o=>console.log(JSON.stringify(o));let start,n=0;
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line),p=m.params||{};
+ if(m.method==='initialize')send({id:m.id,result:{}});
+ if(m.method==='thread/start'){start=p.approvalPolicy;send({id:m.id,result:{thread:{id:'t'},model:'gpt',approvalPolicy:start}});}
+ if(m.method==='thread/resume')send({id:m.id,result:{thread:{id:p.threadId,status:{type:'idle'}},model:'gpt',approvalPolicy:'on-request'}});
+ if(m.method==='turn/start'){send({id:m.id,result:{turn:{id:'u'+n}}});
+  send({method:'item/completed',params:{threadId:p.threadId,item:{type:'agentMessage',id:'r'+(n++),text:'GOT '+JSON.stringify({start,turn:p.approvalPolicy??null})}}});
+  send({method:'turn/completed',params:{threadId:p.threadId,turn:{status:'completed'}}});}
+ if(m.method==='thread/shellCommand'){send({id:m.id,result:{}});
+  const item={type:'commandExecution',id:'sh',command:"/bin/zsh -lc '"+p.command+"'",source:'userShell',commandActions:[{type:'unknown',command:p.command}],status:'inProgress',aggregatedOutput:null,exitCode:null};
+  send({method:'item/started',params:{threadId:p.threadId,item}});
+  send({method:'item/completed',params:{threadId:p.threadId,item:{...item,status:'completed',aggregatedOutput:'file\\n',exitCode:0}}});}
+});`,
+    { mode: 0o700 },
+  );
+  process.env.CFIND_CODEX_BIN = join(dir, "codex");
+  const w = new AgentWorkspace(
+    [{ id: "codex", source: "codex", label: "Codex", path: dir }],
+    join(dir, "data"),
+  );
+  const until = async (check: () => boolean) => {
+    const end = Date.now() + 5000;
+    while (!check()) {
+      if (Date.now() > end) throw new Error("Condition timed out");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  const got = (a: { messages: { text: string }[] }) =>
+    a.messages.filter((m) => m.text.startsWith("GOT ")).map((m) => JSON.parse(m.text.slice(4)));
+  try {
+    const a = await w.create("codex", dir, "one");
+    await until(() => a.state === "idle" && got(a).length === 1);
+    assert.equal(a.permissionMode, "auto");
+    w.setMode(a.id, "manual");
+    await w.send(a.id, "two");
+    await until(() => got(a).length === 2);
+    await w.send(a.id, "three");
+    await until(() => got(a).length === 3);
+    assert.deepEqual(got(a), [
+      { start: "on-request", turn: null },
+      { start: "on-request", turn: "untrusted" },
+      { start: "on-request", turn: null },
+    ]);
+    await w.send(a.id, "! ls");
+    await until(() => a.messages.some((m) => m.tool?.output === "file\n"));
+    assert.equal(a.messages.find((m) => m.id === "sh")!.text, "! ls");
+
+    // A resumed thread shows the policy it already has.
+    const r = await w.create("codex", dir, "resume", "old-thread");
+    await until(() => r.state === "idle" && got(r).length === 1);
+    assert.equal(r.permissionMode, "auto");
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CODEX_BIN;
+    else process.env.CFIND_CODEX_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
