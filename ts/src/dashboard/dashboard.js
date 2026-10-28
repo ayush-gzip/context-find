@@ -787,7 +787,7 @@ function openView(view) {
   else if (history.state?.chat?.key !== S.chat.key)
     history.pushState({ chat: chatState() }, "");
   tellApp();
-  // Esc makes one chat smaller; the next chat opens at the saved size.
+  // Each chat opens at the saved size.
   S.chatFull = localStorage.getItem("cfind-chat-size") !== "panel";
   const drawer = $("#drawer");
   drawer.hidden = false;
@@ -2215,6 +2215,12 @@ document.addEventListener("keydown", (e) => {
     openPalette();
   }
   if (shortcut(e)) e.preventDefault();
+  // ⌥⌘F in the Mac app: Option turns the key into "ƒ", so match the key's position.
+  const app = window.webkit?.messageHandlers?.cfind;
+  if (app && e.metaKey && e.altKey && e.code === "KeyF") {
+    e.preventDefault();
+    app.postMessage("window:fullscreen");
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === "b") {
     e.preventDefault();
     setSidebar(!document.documentElement.classList.contains("sidebar-hidden"));
@@ -2226,15 +2232,9 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     navigate(pages[n - 1]);
   }
-  // Escape in an open dialog closes only the dialog. A full-screen chat
-  // first becomes the side panel, then closes.
-  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]")) {
-    if (S.view && S.chatFull) {
-      S.chatFull = false;
-      $("#drawer").classList.remove("full");
-      renderChat();
-    } else if (S.view) leaveChat();
-  }
+  // Escape in an open dialog closes only the dialog; otherwise it closes the chat.
+  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]") && S.view)
+    leaveChat();
   if (
     e.key === "Enter" &&
     !e.shiftKey &&
