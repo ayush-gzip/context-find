@@ -2023,6 +2023,11 @@ label textarea {
   opacity: 0.25;
   cursor: default;
 }
+/* One button, as on the phone: an empty box shows stop, typing shows send. */
+.composer.no-text:has(.round-button.stop) .round-button.send,
+.composer:not(.no-text) .round-button.stop {
+  display: none;
+}
 .round-button.attach {
   border: 1px solid var(--line-strong);
   color: var(--secondary);
