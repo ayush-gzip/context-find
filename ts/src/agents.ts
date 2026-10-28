@@ -337,6 +337,8 @@ export class AgentWorkspace {
   private shells = new Set<ChildProcessWithoutNullStreams>();
   /** Codex agents whose next turn carries a changed approval policy. */
   private codexModes = new Set<string>();
+  /** /model and /effort picks for a Codex agent's next turn; Codex keeps them after. */
+  private codexPicks = new Map<string, { model?: string; effort?: string }>();
   private modeRequests = new Set<string>();
   private saved?: ReturnType<typeof setTimeout>;
   private dirty = false;
@@ -681,10 +683,10 @@ export class AgentWorkspace {
         push(a, "note", commands.filter(c => c.name.startsWith(name + " ")).map(c => "/" + c.name).join("\n"));
       } else {
         if (!commands.some(c => c.name === `${name} ${arg}`)) throw new Error(`Unknown ${name}: ${arg}`);
-        await rpc.call("thread/settings/update", { threadId: a.sid, [name === "model" ? "model" : "effort"]: arg });
+        this.codexPicks.set(a.id, { ...this.codexPicks.get(a.id), [name]: arg });
         if (name === "model") a.model = arg;
         else a.effort = arg;
-        push(a, "note", `${name === "model" ? "Model" : "Reasoning effort"} set to ${arg}`);
+        push(a, "note", `${name === "model" ? "Model" : "Reasoning effort"} set to ${arg}. It starts with the next message.`);
       }
     } else if (name === "compact") {
       await rpc.call("thread/compact/start", { threadId: a.sid });
@@ -874,10 +876,12 @@ export class AgentWorkspace {
               path: uploadPath(id),
             })),
           ],
-          // Codex keeps this policy for later turns, so it is sent once per change.
+          // Codex keeps these for later turns, so each is sent once per change.
           ...(this.codexModes.has(a.id) ? { approvalPolicy: codexPolicy(a) } : {}),
+          ...this.codexPicks.get(a.id),
         });
         this.codexModes.delete(a.id);
+        this.codexPicks.delete(a.id);
         a.turnId = r.turn.id;
       } else {
         let child = this.claude.get(a.id);

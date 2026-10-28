@@ -792,7 +792,7 @@ function openView(view) {
   const drawer = $("#drawer");
   drawer.hidden = false;
   drawer.classList.toggle("full", S.chatFull);
-  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-images" id="composer-images" hidden></div><div class="composer-box"><div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><span id="composer-buttons"></span></div><div class="composer-footer"><button type="button" class="mode-button" data-mode hidden></button><span id="composer-hint"></span></div></form>`;
+  drawer.innerHTML = `<div class="drawer-head"><div class="chat-heading"><h2 id="chat-title"></h2><small id="chat-meta"></small></div><div class="drawer-actions" id="chat-actions"></div></div><div class="reader-find" id="chat-find" hidden><input id="reader-q" placeholder="Find in conversation…" aria-label="Find in conversation" autocomplete="off"></div><div class="conversation chat" id="chat-list"></div><div id="chat-pending"></div><form id="agent-form" class="composer"><div class="composer-box"><div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div><div class="composer-images" id="composer-images" hidden></div><textarea id="agent-prompt" rows="1" aria-label="Message"></textarea><div class="composer-tools"><button type="button" class="round-button attach" data-attach aria-label="Attach images" title="Attach images">${icon('<path d="M12 5v14M5 12h14"/>')}</button><input type="file" id="image-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button type="button" class="mode-button" data-mode hidden></button><span id="composer-buttons"></span></div></div><div class="composer-footer"><span id="composer-hint"></span></div></form>`;
   $("#agent-prompt").value = S.drafts[S.chat.key] || "";
   grow($("#agent-prompt"));
   renderAttachments();
@@ -947,11 +947,16 @@ function chatItems(a, s) {
     });
   for (const m of (a?.messages || []).filter(m => !a.external || m.role === "note"))
     items.push(messageItem("m:" + m.id, m, label));
-  if (a?.state === "running" || a?.state === "queued")
+  // Shown from the moment the agent starts, before its first words or tool call.
+  if (a ? ["running", "queued"].includes(a.state) : s.state === "running") {
+    const asked = [...(a ? a.messages : chat.history)]
+      .reverse()
+      .find((m) => m.role === "user" && m.time)?.time;
     items.push({
       key: "typing",
-      html: `<div class="msg agent"><div class="bubble typing" aria-label="${esc(label)} is working"><i></i><i></i><i></i></div></div>`,
+      html: `<div class="msg agent"><div class="bubble typing" aria-label="${esc(label)} is working"><i></i><i></i><i></i></div><div class="msg-meta"><span data-since="${asked || Date.now()}">Working</span></div></div>`,
     });
+  }
   (a?.queue || []).forEach((q, i) =>
     items.push({
       key: `q:${i}:${q.text.length}:${q.images?.length || 0}`,
@@ -1089,6 +1094,7 @@ function renderAttachments() {
   if (!box || !S.chat) return;
   const list = S.images[S.chat.key] || [];
   box.hidden = !list.length;
+  if ($("#composer-hint")) shellMode();
   box.innerHTML = list
     .map(
       (im, i) =>
@@ -1338,6 +1344,7 @@ function renderChat() {
       !list.children.length,
     items = chatItems(a, s);
   patch(list, items);
+  tickWorking();
   markFind();
   if (near && !$("#reader-q").value) list.scrollTop = list.scrollHeight;
   const pending = $("#chat-pending"),
@@ -1377,10 +1384,29 @@ function renderChat() {
 /** A message that starts with ! runs as a command in the agent's folder. */
 function shellMode() {
   const hint = $("#composer-hint"),
-    on = !!hint.dataset.shell && $("#agent-prompt").value.startsWith("!");
-  $("#agent-form").classList.toggle("shell", on);
+    t = $("#agent-prompt"),
+    on = !!hint.dataset.shell && t.value.startsWith("!");
+  $("#agent-form").classList.toggle("bang-mode", on);
+  $("#agent-form").classList.toggle(
+    "no-text",
+    !t.value.trim() && !S.images[S.chat.key]?.length,
+  );
   hint.textContent = on ? hint.dataset.shell : hint.dataset.hint;
 }
+/** Seconds since the agent was asked, as its terminal counts them. */
+function tickWorking() {
+  for (const el of document.querySelectorAll("[data-since]")) {
+    const s = Math.max(0, Math.round((Date.now() - el.dataset.since) / 1000));
+    el.textContent =
+      "Working · " +
+      (s < 60
+        ? s + "s"
+        : s < 3600
+          ? `${Math.floor(s / 60)}m ${s % 60}s`
+          : `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`);
+  }
+}
+setInterval(tickWorking, 1000);
 /** Shift+Tab, as in the terminal: switches between Auto and Ask first. */
 function switchMode() {
   const a = viewAgent();

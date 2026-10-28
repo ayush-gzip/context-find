@@ -31,7 +31,6 @@ test("Codex joins an existing thread, exposes commands and resolves the exact re
       if (m.method === "model/list") reply({ data: [{ id: "codex-test", model: "codex-test", displayName: "Test model", supportedReasoningEfforts: [{ reasoningEffort: "medium" }, { reasoningEffort: "high" }] }], nextCursor: null });
       if (m.method === "skills/list") reply({ data: [{ cwd: dir, skills: [{ name: "example-skill", description: "Example", path: "/fixture/SKILL.md", enabled: true }] }] });
       if (m.method === "permissionProfile/list") reply({ data: [], nextCursor: null });
-      if (m.method === "thread/settings/update") reply({ settings: m.params });
       if (m.method === "turn/start") reply({ turn: { id: "turn2" } });
       if (m.method === "thread/compact/start") reply({});
     });
@@ -68,14 +67,25 @@ test("Codex joins an existing thread, exposes commands and resolves the exact re
     await until(() => !a.pending && a.state === "idle");
     await w.send(a.id, "/model codex-test");
     await w.send(a.id, "/effort high");
-    assert.ok(calls.some(c => c.method === "thread/settings/update" && c.params.model === "codex-test"));
-    assert.ok(calls.some(c => c.method === "thread/settings/update" && c.params.effort === "high"));
+    // Codex 0.164 has no thread/settings/update; the picks go with the next turn.
+    assert.ok(!calls.some(c => c.method === "thread/settings/update"));
+    assert.equal(a.model, "codex-test");
+    assert.equal(a.effort, "high");
     await assert.rejects(w.send(a.id, "/not-a-command"), /Unsupported|Unknown/);
     await w.send(a.id, "/example-skill do this");
     await until(() => calls.some(c => c.method === "turn/start"));
-    const input = calls.find(c => c.method === "turn/start").params.input;
+    const turn = calls.find(c => c.method === "turn/start").params, input = turn.input;
     assert.ok(input.some((i: any) => i.type === "skill" && i.path === "/fixture/SKILL.md"));
     assert.ok(input.some((i: any) => i.type === "text" && i.text === "do this"));
+    assert.equal(turn.model, "codex-test");
+    assert.equal(turn.effort, "high");
+    client!.send(JSON.stringify({ method: "turn/completed", params: { threadId: "existing", turn: { status: "completed" } } }));
+    await until(() => a.state === "idle");
+    await w.send(a.id, "again");
+    await until(() => calls.filter(c => c.method === "turn/start").length === 2);
+    const second = calls.filter(c => c.method === "turn/start")[1].params;
+    assert.equal(second.model, undefined);
+    assert.equal(second.effort, undefined);
   } finally {
     w.close();
     ws.clients.forEach(c => c.terminate());
