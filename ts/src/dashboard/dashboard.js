@@ -24,6 +24,8 @@ const S = {
   remoteErrors: [],
   view: null,
   chat: null,
+  /** Pushes the open local chat's new messages (watchChat). */
+  chatStream: null,
   drafts: {},
   images: {},
   // The / menu per profile and folder: a list, null while it loads, or an error.
@@ -128,7 +130,11 @@ async function api(path, body) {
   return data;
 }
 function connect() {
-  const stream = new EventSource("/api/events?t=" + encodeURIComponent(T));
+  // The first metrics and workspace events are whole; the -delta ones after them
+  // carry only what changed (src/delta.ts).
+  const stream = new EventSource(
+    "/api/events?delta=1&t=" + encodeURIComponent(T),
+  );
   stream.onopen = () => {
     $("#live-badge").className = "live-badge";
     $("#live-badge").innerHTML = "<i></i> Live";
@@ -141,18 +147,33 @@ function connect() {
     $("#collector-state").innerHTML =
       "Connection lost<small>Reconnecting automatically</small>";
   };
-  stream.addEventListener("metrics", (e) => {
-    S.metrics = JSON.parse(e.data);
+  const onMetrics = () => {
     updateStatus();
     render();
     followSession();
-  });
-  stream.addEventListener("workspace", (e) => {
-    S.workspace = JSON.parse(e.data);
+  };
+  const onWorkspace = () => {
     updateStatus();
     render();
     renderChat();
     updateLogin();
+  };
+  stream.addEventListener("metrics", (e) => {
+    S.metrics = JSON.parse(e.data);
+    onMetrics();
+  });
+  stream.addEventListener("metrics-delta", (e) => {
+    if (!S.metrics) return;
+    S.metrics = cfindDelta.applyDelta(S.metrics, JSON.parse(e.data));
+    onMetrics();
+  });
+  stream.addEventListener("workspace", (e) => {
+    S.workspace = JSON.parse(e.data);
+    onWorkspace();
+  });
+  stream.addEventListener("workspace-delta", (e) => {
+    S.workspace = cfindDelta.applyDelta(S.workspace, JSON.parse(e.data));
+    onWorkspace();
   });
 }
 function updateStatus() {
@@ -652,6 +673,7 @@ function viewAgent() {
 function closeDrawer() {
   S.view = null;
   S.chat = null;
+  watchChat();
   tellApp();
   $("#drawer").hidden = true;
   $("#drawer").innerHTML = "";
@@ -696,7 +718,47 @@ function openView(view) {
   grow($("#agent-prompt"));
   renderAttachments();
   renderChat();
-  void loadHistory();
+  if (!watchChat()) void loadHistory();
+}
+/** A local transcript pushes its new messages while its chat is open. Returns
+ *  false for chats that load another way (remote sessions, dashboard agents). */
+function watchChat() {
+  S.chatStream?.close();
+  S.chatStream = null;
+  const chat = S.chat,
+    s = S.view?.kind === "session" ? S.view.s : null;
+  if (!chat || !s || s.host) return false;
+  const es = new EventSource(
+    "/api/chat-events?t=" +
+      encodeURIComponent(T) +
+      "&path=" +
+      encodeURIComponent(s.path),
+  );
+  // The first event and each reconnect send the whole chat; later ones only the
+  // new or changed messages, merged by id.
+  es.addEventListener("chat", (e) => {
+    const d = JSON.parse(e.data);
+    chat.history = d.messages;
+    chat.omitted = d.omitted;
+    chat.loading = false;
+    chat.error = "";
+    if (S.chat === chat) renderChat();
+  });
+  es.addEventListener("chat-delta", (e) => {
+    const d = JSON.parse(e.data),
+      byId = new Map(chat.history.map((m) => [m.id, m]));
+    for (const m of d.messages) byId.set(m.id, m);
+    chat.history = [...byId.values()].slice(-400);
+    chat.omitted = d.omitted;
+    if (S.chat === chat) renderChat();
+  });
+  // A refused stream does not retry; the plain request shows why.
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED && S.chatStream === es)
+      void loadHistory();
+  };
+  S.chatStream = es;
+  return true;
 }
 function grow(t) {
   // The auto height below lets the chat scroll for a moment; without this the
@@ -744,7 +806,7 @@ function followSession() {
   if (!s) return;
   S.view.s = { ...S.view.s, ...s };
   // Each reload reads the whole transcript, so a busy session reloads at most every 3s.
-  if (s.updatedAt !== S.chat.loadedAt && !S.chat.loading) {
+  if (!S.chatStream && s.updatedAt !== S.chat.loadedAt && !S.chat.loading) {
     const chat = S.chat;
     chat.loading = true;
     setTimeout(
@@ -813,11 +875,21 @@ function chatItems(a, s) {
     });
   return items;
 }
+// Markdown is most of a render's cost. Live updates replace a changed message
+// with a new object, so an unchanged one keeps its HTML.
+const rendered = new WeakMap();
 function messageItem(key, m, label) {
+  if (m.role !== "tool" && m.role !== "note") S.chatText.set(key, m.text);
+  const hit = rendered.get(m);
+  if (hit?.key === key && hit.label === label) return hit.item;
+  const item = messageHtml(key, m, label);
+  rendered.set(m, { key, label, item });
+  return item;
+}
+function messageHtml(key, m, label) {
   if (m.role === "tool") return { key, html: toolHtml(m) };
   if (m.role === "note")
     return { key, html: `<div class="chat-note">${esc(m.text)}</div>` };
-  S.chatText.set(key, m.text);
   const user = m.role === "user";
   return {
     key,
@@ -1301,7 +1373,9 @@ async function sendFromComposer() {
           created.busy ? "Queued after the current reply" : "Sent to Codex",
         );
       else {
-        S.workspace.agents.unshift(created);
+        // The live stream may have added it already.
+        if (!S.workspace.agents.some((x) => x.id === created.id))
+          S.workspace.agents.unshift(created);
         S.view = { kind: "agent", id: created.id };
         S.chat.key = viewKey();
         tellApp();
@@ -1638,7 +1712,8 @@ document.addEventListener("submit", async (e) => {
           cwd: f.get("cwd"),
           prompt: f.get("prompt"),
         });
-      S.workspace.agents.unshift(a);
+      if (!S.workspace.agents.some((x) => x.id === a.id))
+        S.workspace.agents.unshift(a);
       $("#new-dialog").close();
       navigate("workspace");
       openAgent(a.id, true);

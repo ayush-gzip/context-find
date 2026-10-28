@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appendFileSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
@@ -103,6 +104,40 @@ test("dashboard APIs authenticate, reject foreign origins, and stream a fresh sn
     assert.equal((await conversation(join(home, "outside.jsonl"))).status, 403);
     assert.equal((await conversation(join(root, "escape.jsonl"))).status, 403);
     assert.equal((await conversation(join(root, "missing.jsonl"))).status, 404);
+    // An open chat streams its messages, then each new one, over its own stream.
+    const chatEvents = (path: string, t = token) =>
+      fetch(
+        base + "/api/chat-events?path=" + encodeURIComponent(path) + "&t=" + t,
+      );
+    assert.equal(
+      (await chatEvents(join(root, "chat.jsonl"), "wrong")).status,
+      403,
+    );
+    assert.equal((await chatEvents(join(home, "outside.jsonl"))).status, 403);
+    assert.equal((await chatEvents(join(root, "escape.jsonl"))).status, 403);
+    const live = await chatEvents(join(root, "chat.jsonl"));
+    assert.equal(live.headers.get("content-type"), "text/event-stream");
+    const frames = live.body!.getReader(),
+      next = async () => new TextDecoder().decode((await frames.read()).value);
+    assert.match(await next(), /event: chat\ndata: .*<b>hi<\/b>/);
+    appendFileSync(
+      join(root, "chat.jsonl"),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        message: { content: "more" },
+      }) + "\n",
+    );
+    assert.match(await next(), /event: chat-delta\ndata: .*"more"/);
+    await frames.cancel();
+    const deltas = (
+      await fetch(base + "/api/events?delta=1&t=" + token)
+    ).body!.getReader();
+    let first = "";
+    while (!/event: workspace/.test(first))
+      first += new TextDecoder().decode((await deltas.read()).value);
+    assert.match(first, /^event: metrics\n/);
+    await deltas.cancel();
     const script = await fetch(base + "/markdown.js");
     assert.equal(script.headers.get("content-type"), "text/javascript");
     const bad = await fetch(base + "/api/agent?t=" + token, {

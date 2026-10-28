@@ -40,7 +40,8 @@ import { Search } from "./search.ts";
 import { join } from "node:path";
 import { Monitor, dashboardProfiles, monitorDir } from "./monitor.ts";
 import { AgentWorkspace } from "./agents.ts";
-import { readConversation } from "./conversation.ts";
+import { ChatFeeds } from "./chatfeed.ts";
+import { Deltas } from "./delta.ts";
 import {
   capturePane,
   codexHolder,
@@ -156,20 +157,53 @@ export function createWebServer(
       monitor.start();
     }
   };
-  const peers = new Set<ServerResponse>();
-  const broadcast = (event: string, value: unknown) => {
-    const frame = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
-    for (const peer of peers) {
-      if (peer.writableLength > 2 * 1024 * 1024) {
-        peer.end();
-        peers.delete(peer);
-      } else peer.write(frame);
-    }
+  // Streams that asked for deltas (?delta=1) get the full snapshot once, then only
+  // what changed. Older apps keep getting full snapshots.
+  const peers = new Set<ServerResponse>(),
+    deltaPeers = new Set<ServerResponse>(),
+    chatPeers = new Set<ServerResponse>();
+  const write = (peer: ServerResponse, frame: string) => {
+    // A peer that cannot keep up is closed; it reconnects and starts from a snapshot.
+    if (peer.writableLength > 2 * 1024 * 1024) {
+      peer.end();
+      peers.delete(peer);
+      deltaPeers.delete(peer);
+    } else peer.write(frame);
   };
-  monitor.subscribe(() => broadcast("metrics", monitor.snapshot()));
-  workspace.subscribe(() => broadcast("workspace", workspace.snapshot()));
+  const sse = (event: string, value: unknown) =>
+    `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
+  const streams = {
+    metrics: { deltas: new Deltas(), read: () => monitor.snapshot() },
+    workspace: { deltas: new Deltas(), read: () => workspace.snapshot() },
+  };
+  /** Sends what changed to every stream; returns the snapshot it compared. */
+  const flush = (name: keyof typeof streams) => {
+    const s = streams[name],
+      snap = s.read(),
+      delta = s.deltas.next(snap);
+    if (delta) {
+      const frame = sse(name + "-delta", delta);
+      for (const peer of deltaPeers) write(peer, frame);
+    }
+    if (peers.size) {
+      const frame = sse(name, snap);
+      for (const peer of peers) write(peer, frame);
+    }
+    return snap;
+  };
+  monitor.subscribe(() => flush("metrics"));
+  // Agents change on every streamed token; one frame per 16 ms is enough.
+  let workspaceQueued: ReturnType<typeof setTimeout> | undefined;
+  workspace.subscribe(() => {
+    workspaceQueued ??= setTimeout(() => {
+      workspaceQueued = undefined;
+      flush("workspace");
+    }, 16);
+  });
+  const chats = new ChatFeeds();
   const heartbeat = setInterval(() => {
-    for (const peer of peers) peer.write(": heartbeat\n\n");
+    for (const peer of [...peers, ...deltaPeers, ...chatPeers])
+      peer.write(": heartbeat\n\n");
   }, 15000);
   heartbeat.unref();
   const localRoots = [...profiles.map((p) => p.path)].map((r) => resolve(r));
@@ -219,7 +253,8 @@ export function createWebServer(
       if (
         url.pathname === "/dashboard.css" ||
         url.pathname === "/dashboard.js" ||
-        url.pathname === "/markdown.js"
+        url.pathname === "/markdown.js" ||
+        url.pathname === "/delta.js"
       ) {
         res.writeHead(200, {
           "content-type": url.pathname.endsWith(".css")
@@ -318,14 +353,49 @@ export function createWebServer(
               connection: "keep-alive",
               "x-accel-buffering": "no",
             });
+            const deltas = url.searchParams.get("delta") === "1";
+            // Flushing first makes this snapshot the base of the next delta.
             res.write(
-              `event: metrics\ndata: ${JSON.stringify(monitor.snapshot())}\n\n`,
+              sse("metrics", deltas ? flush("metrics") : monitor.snapshot()),
             );
             res.write(
-              `event: workspace\ndata: ${JSON.stringify(workspace.snapshot())}\n\n`,
+              sse(
+                "workspace",
+                deltas ? flush("workspace") : workspace.snapshot(),
+              ),
             );
-            peers.add(res);
-            req.on("close", () => peers.delete(res));
+            const set = deltas ? deltaPeers : peers;
+            set.add(res);
+            req.on("close", () => set.delete(res));
+            return;
+          }
+          if (url.pathname === "/api/chat-events") {
+            const target = containedTranscript(
+              url.searchParams.get("path") ?? "",
+            );
+            if (Array.isArray(target)) {
+              json(res, target[0], { error: target[1] });
+              return;
+            }
+            res.writeHead(200, {
+              "content-type": "text/event-stream",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+            try {
+              const stop = chats.subscribe(target, (event, view) => {
+                if (res.writableEnded) return;
+                if (res.writableLength > 2 * 1024 * 1024) res.end();
+                else res.write(sse(event, view));
+              });
+              chatPeers.add(res);
+              req.on("close", () => {
+                stop();
+                chatPeers.delete(res);
+              });
+            } catch (e) {
+              res.end(sse("error", { error: (e as Error).message }));
+            }
             return;
           }
           if (url.pathname === "/api/metrics") {
@@ -633,7 +703,7 @@ export function createWebServer(
               json(res, target[0], { error: target[1] });
               return;
             }
-            json(res, 200, readConversation(target));
+            json(res, 200, chats.view(target));
             return;
           }
           if (url.pathname === "/api/session") {

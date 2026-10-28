@@ -7,7 +7,9 @@ import {
   realpathSync,
   renameSync,
   statSync,
+  watch,
   writeFileSync,
+  type FSWatcher,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -342,6 +344,8 @@ export class Monitor {
   private updatedAt = 0;
   private errors: string[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private watchers: FSWatcher[] = [];
+  private nudge?: ReturnType<typeof setTimeout>;
   private listeners = new Set<() => void>();
   private generation = 0;
   private copies?: { generation: number; byPath: Map<string, Copies> };
@@ -368,11 +372,46 @@ export class Monitor {
         void this.refresh();
       }, 1500);
       this.timer.unref();
+      // Hooks and live records change the moment a session starts or stops
+      // working; the 1.5 s scan stays as the safety net.
+      const own = [join(this.dataDir, "signals"), join(this.dataDir, "live")];
+      for (const dir of own)
+        try {
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+        } catch {}
+      const dirs = [
+        ...own,
+        ...this.roots
+          .filter((p) => p.source === "claude")
+          .map((p) => join(dirname(p.path), "sessions")),
+      ];
+      for (const dir of dirs)
+        try {
+          const w = watch(dir, () => this.soon());
+          w.on("error", () => w.close());
+          w.unref();
+          this.watchers.push(w);
+        } catch {}
     }
   }
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const w of this.watchers) w.close();
+    this.watchers = [];
+  }
+  /** Refreshes soon, at most every 200 ms however often the folders change. */
+  private soon() {
+    if (this.nudge) return;
+    this.nudge = setTimeout(
+      () => {
+        this.nudge = undefined;
+        if (this.busy) this.soon();
+        else void this.refresh();
+      },
+      Math.max(30, 200 - (Date.now() - this.updatedAt)),
+    );
+    this.nudge.unref();
   }
   refresh(): Promise<void> {
     if (!this.busy)
@@ -527,13 +566,17 @@ export class Monitor {
   }
   snapshot() {
     const sessions: ObservedSession[] = [],
-      usage: {
-        day: string;
-        model: string;
-        profile: string;
-        cwd: string;
-        tokens: Tokens;
-      }[] = [],
+      // One row per day, model, profile and folder, so the live stream can key it.
+      usage = new Map<
+        string,
+        {
+          day: string;
+          model: string;
+          profile: string;
+          cwd: string;
+          tokens: Tokens;
+        }
+      >(),
       days = new Map<
         string,
         { day: string; profile: string; tokens: Tokens }
@@ -575,7 +618,16 @@ export class Monitor {
         const b = copy?.buckets[key]
           ? { ...bucket, tokens: minus(bucket.tokens, copy.buckets[key]) }
           : bucket;
-        usage.push({ ...b, profile: profile.id, cwd: s.cwd });
+        const uk = `${b.day}|${b.model}|${profile.id}|${s.cwd}`;
+        if (!usage.has(uk))
+          usage.set(uk, {
+            day: b.day,
+            model: b.model,
+            profile: profile.id,
+            cwd: s.cwd,
+            tokens: zero(),
+          });
+        add(usage.get(uk)!.tokens, b.tokens);
         const dk = b.day + "|" + profile.id,
           mk = b.model + "|" + profile.id;
         if (!days.has(dk))
@@ -668,10 +720,16 @@ export class Monitor {
       updatedAt: this.updatedAt,
       collecting: !!this.busy,
       profiles,
-      sessions: sessions.sort((a, b) => b.updatedAt - a.updatedAt),
-      days: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)),
+      // dashboard/delta.js sorts merged lists the same way.
+      sessions: sessions.sort(
+        (a, b) => b.updatedAt - a.updatedAt || (a.path < b.path ? -1 : 1),
+      ),
+      days: [...days.values()].sort(
+        (a, b) =>
+          a.day.localeCompare(b.day) || a.profile.localeCompare(b.profile),
+      ),
       models: [...models.values()],
-      usage,
+      usage: [...usage.values()],
       activity,
       costs,
       errors: this.errors,

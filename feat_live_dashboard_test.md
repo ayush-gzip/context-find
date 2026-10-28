@@ -39,17 +39,18 @@ Environment for tests: `CFIND_CLAUDE_BIN` and `CFIND_CODEX_BIN` select fake agen
 binaries. `CFIND_DATA_DIR`, `HOME` and `CODEX_HOME` isolate data. Do not print the
 token in `~/.context-find/dashboard/service.json`.
 
-## Automated tests (98/98 pass, 2026-10-27)
+## Automated tests (99/99 pass, 2026-10-28)
 
 | file | covers |
 | --- | --- |
 | `test/monitor.test.ts` | Codex cumulative deltas, Claude message-ID dedup, partial appends, profiles; a Claude session with a live PID in `sessions/*.json` is `open` even when idle, a dead PID is not; a record with a tmux pane sets `tmux`; a record in `<dataDir>/live` is read; status line limits and cost go to the profile that holds the transcript, not the hook's profile tag; a message ID copied into another file counts once per profile (owner = earliest session), deleting the owner moves the credit, a version 1 cache is ignored; titles lose paste tags, also a tag cut by the 220-character limit; Claude status `shell` (turn over, background shell tasks still running) is `running` |
 | `test/collector.test.ts` | hook receiver, status-line wrapper, install idempotence |
-| `test/dashboard_api.test.ts` | token, foreign Origin, POST JSON, SSE reconnect snapshot; `/api/conversation` token, outside path 403, symlink escape 403, missing 404; `/markdown.js` served. `/api/upload`: a PNG is saved as `<32 hex>.png`; SVG text sent as `image/png` 415, `text/plain` 415, over 10 MB 413; GET without token 403; served back with its content type and `nosniff`; `../` and encoded ids 400, unknown id 404 |
+| `test/dashboard_api.test.ts` | token, foreign Origin, POST JSON, SSE reconnect snapshot; `/api/conversation` token, outside path 403, symlink escape 403, missing 404; `/markdown.js` served. `/api/chat-events`: wrong token, outside path and symlink 403; first event `chat` with the messages, an appended line arrives as `chat-delta`. `/api/events?delta=1` starts with full `metrics` then `workspace`. `/api/upload`: a PNG is saved as `<32 hex>.png`; SVG text sent as `image/png` 415, `text/plain` 415, over 10 MB 413; GET without token 403; served back with its content type and `nosniff`; `../` and encoded ids 400, unknown id 404 |
 | `test/conversation.test.ts` | Claude: preambles, `isMeta`, sidechains, reminders and OSC 52 removed, tool_use paired with tool_result, code whitespace kept. Codex: AGENTS.md wrapper and developer messages hidden, calls paired by `call_id`, old JSON shell output, code-mode `cmd` extraction. A message typed while Claude works (`attachment` / `queued_command`, origin human) shows as a user message. Images: Claude `image` base64 blocks and Codex `input_image` data URLs come back as data URLs; other types and bad base64 are dropped; a message with only an image is kept; newest images fill an 8 MB budget, older ones become "[N image(s) not shown]". A user turn with `origin.kind = task-notification` becomes a note with its `<summary>` (none: hidden); `<pasted_content id=…>` tags are removed, the pasted text stays. Caps: newest 400 messages, `omitted` count, 8000-character tool text |
 | `test/markdown.test.ts` | script, img onerror, svg onload, `javascript:` links, attribute breakout, fence breakout, table cells: all stay text. Fenced code keeps tabs and spaces; open fence while streaming; nested lists with code; tables; links; `__init__.py` unchanged |
 | `test/live.test.ts` | fake tmux binary (`CFIND_TMUX_BIN`): send runs `display-message`, `load-buffer`, `paste-buffer -d -p -r`, `send-keys Enter`; control characters removed; refused when busy, waiting, PID start time differs, no pane, or the pane process is not the PID or its ancestor. Take over: refused in tmux or on a start-time mismatch; SIGTERM stops a verified child. Busy sends are allowed, also with status `shell`; a menu that opens between paste and Enter stops the Enter. Codex: fake `lsof` (`CFIND_LSOF_BIN`) and fake `codex`: no holder is `none`, `--listen stdio://` is `other`, `--listen unix://` is `helper`, missing lsof throws; `codex queue --thread --message` keeps newlines and drops NUL. Terminal view: `capture-pane -p` (no `-e`) with control characters removed, last 40 lines; `send-keys` only for Up, Down, Left, Right, Enter, Escape, Tab, BTab, Space, 1 to 9 and a to z; both work while the session waits and are refused on a start-time mismatch, no pane, or a pane that does not run the process |
 | `test/agents.test.ts` | Codex queue order, decline, child agents. Claude fake binary: refuses to prompt unless `--permission-prompt-tool stdio` is set; AskUserQuestion answer keyed by question text; allow for session forwards only `session` suggestions; tool_result fills tool output; queue removal; answer shown as a user message. Codex fake: `requestUserInput` answers by question id, `acceptForSession`, command output and exit code, file change diff. Attached images: Claude gets `image` base64 blocks plus the text, Codex gets `localImage` items with the saved path; the user message keeps the upload ids |
+| `test/livestream.test.ts` | Incremental reading: a Claude and a Codex fixture (images, tools, local commands, notes, queued message, compaction) cut at every byte, read in two parts, equal a whole read, and the second part's delta merged by id equals it too. 2500 messages: 400 shown, 2100 omitted, a late tool result still pairs, memory kept to 1000-2000 messages. A file cut short or replaced → `reset`. Chat feed: a new line reaches the subscriber through the file watch (about 2 ms, under 250 ms asserted, the 1 s poll is only a safety net); 50 quick appends arrive in fewer frames with nothing lost; nothing after unsubscribe. Snapshot deltas: 3000 random steps (sessions added, removed, reordered, a field removed; agents added, removed, reordered, token appends, tool output, a field set to undefined) merged with `dashboard/delta.js` equal the full snapshot each step. One token on a 5-agent, 500-message workspace is a 70-byte frame |
 | `test/devices.test.ts`, `test/iphone_contract.test.ts` | iPhone pairing and the fields the app decodes. See `feat_iphone_app_test.md` |
 
 ## Real end-to-end runs (2026-10-27)
@@ -118,6 +119,7 @@ isolated profile). Working folder: the session scratchpad `probe-cwd`.
 | E58 | Usage & analytics page removed; its input, output and cache figures moved to Overview's usage panel (Total, Input, Output, Cache "read · written", Sessions on one row at 1140 px). The Models panel, tokens-by-project table and API value are gone with it (they were only on that page). `#usage` opens Overview; ⌘1-⌘4 and G O/A/S/M follow the 4 sections. Pass |
 | E59 | sidebar back to the sections only: no recent-session list (E54 reverted) and no app name in the top row, as in the Claude app; New agent and Search stay. Pass |
 | E60 | ⌘⇧F: the page no longer toggles the chat; the Mac app menu View → Full Screen (⇧⌘F) makes the window full screen. In Chrome ⌘⇧F does nothing in the page; the shortcuts list shows the row only in the Mac app. Mac app not run yet (needs install). Pass in Chrome |
+| E61 | Mac app (cfind-apple 158bbbb, team-signed Release) installed 2026-10-28 | window capture: no title bar and no "cfind" title; the window buttons, the sidebar button and the page title share one 52 px row; glass behind the sidebar. ⇧⌘F, drag and double-click not tried (the user's screen was in use). Pass for the layout |
 | E7 | before the fix: Claude print mode without `--permission-prompt-tool stdio` | Write denied with no prompt. This was the old browser adapter behavior |
 
 Personal Claude profile inference was not tested; it reported "out of usage credits"
@@ -139,7 +141,36 @@ in an earlier run and again on 2026-10-27 (E21 ran on Default).
 | 77 MB Claude | 347 ms |
 | 67 MB Claude | 225 ms |
 
-A followed live session reloads its transcript at most once every 3 seconds.
+Before 2026-10-28 a followed live session reloaded its whole transcript at most once
+every 3 seconds, and the stream sent the full snapshot (about 530 KB) every 1.5 s.
+
+### Live chat latency (2026-10-28)
+
+| measure | before | after |
+| --- | --- | --- |
+| new transcript line → shown in an open chat (Chrome, 400-message chat, scratch daemon, 40 samples) | 1.5 to 4.5 s by design (1.5 s scan + up to 3 s reload throttle + full parse) | p50 19 ms, p95 23 ms, max 23 ms |
+| render of a 400-message chat after one change | 10 ms | 0.25 ms (HTML kept per message object) |
+| live stream bytes per update (real daemon, 675 sessions) | about 530 KB full snapshot | 13 bytes (only `updatedAt`) to 6 KB |
+| stream bytes in 10 s after the first snapshot | 5.3 MB | under 10 KB |
+| one streamed token of a dashboard agent | whole workspace (about 34 KB) | about 70 bytes (`append`) |
+| `readConversation` on 64 real transcripts | 2345 ms | 851 ms, same output (SHA-1 of each result matched on the 63 files that did not change in between) |
+
+How: the daemon watches each open chat's transcript (`fs.watch`, kqueue on macOS),
+reads only the new bytes, and pushes the new or changed messages on
+`/api/chat-events`. A second read after the watch starts catches a write made before
+it; a 1 s stat poll is the safety net. The main stream sends `metrics-delta` and
+`workspace-delta` (keyed upserts, removals, order, text appends) to clients that ask
+with `?delta=1`; older clients still get full snapshots. Workspace frames are
+coalesced to one per 16 ms. The monitor also refreshes within 30-200 ms when a file
+changes in the hook `signals`, `live` and Claude `sessions` folders.
+
+Check after 20 s of deltas on the real daemon: the page's merged snapshot equalled a
+fresh `/api/metrics` (675 sessions, 307 usage rows, 90 days), apart from timing
+fields; no console errors.
+
+Scripts (session scratchpad): `latency-probe.mjs` (scratch HOME and daemon, headless
+Chrome, appends lines and times when the chat shows them), `bytes.mjs`, `deltas.mjs`,
+`live-check.mjs`, `golden.ts`.
 
 ## Known limits
 
@@ -191,6 +222,8 @@ A followed live session reloads its transcript at most once every 3 seconds.
 ## Rerun before you change this area
 
 1. `npm test` in `ts`.
+1. After a parser change: run `golden.ts` before and after on real transcripts, and
+   `latency-probe.mjs` (p50 should stay under 50 ms).
 2. Reload the daemon with `launchctl kickstart -k`, then `daemon status`.
 3. In the browser, open one Claude and one Codex session: check left/right alignment,
    code copy, tool expand, and find.
