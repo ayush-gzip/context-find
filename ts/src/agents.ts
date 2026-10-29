@@ -18,6 +18,7 @@ import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 import { startInTmux } from "./live.ts";
 import { askCommand, askReply } from "./asks.ts";
+import { recordSignal } from "./collector.ts";
 
 export interface Message {
   id: string;
@@ -274,6 +275,16 @@ export function applyCodexEvent(a: Agent, method: string, p: any) {
     a.error = p.error?.message ?? p.message ?? "Agent error";
     if (!p.willRetry) a.state = "failed";
   }
+}
+/** Claude's `rate_limit_event`, in the shape its statusline reports limits. */
+export function claudeRateLimits(info: any) {
+  const out: Record<string, { used_percentage: number; resets_at: number }> = {};
+  for (const k of ["five_hour", "seven_day"]) {
+    const w = info?.unifiedWindows?.[k];
+    if (typeof w?.utilization === "number" && typeof w.resetsAt === "number")
+      out[k] = { used_percentage: Math.round(w.utilization * 100), resets_at: w.resetsAt };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 export function applyClaudeEvent(a: Agent, p: any) {
   a.updatedAt = Date.now();
@@ -1049,6 +1060,16 @@ export class AgentWorkspace {
                   a.pending = undefined;
                   a.state = "running";
                 }
+              } else if (p.type === "rate_limit_event") {
+                // Print mode runs no statusline, so this is its only report of the limits.
+                const limits = claudeRateLimits(p.rate_limit_info);
+                if (limits)
+                  recordSignal(
+                    a.profile,
+                    { session_id: p.session_id ?? a.sid, rate_limits: limits },
+                    this.dataDir,
+                    "statusline",
+                  );
               } else {
                 applyClaudeEvent(a, p);
                 if (p.type === "result") void this.next(a);

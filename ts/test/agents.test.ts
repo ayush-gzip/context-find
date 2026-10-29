@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCodexEvent, applyClaudeEvent, newAgent } from "../src/agents.ts";
+import { applyCodexEvent, applyClaudeEvent, claudeRateLimits, newAgent } from "../src/agents.ts";
+import { Monitor } from "../src/monitor.ts";
 import { AgentWorkspace } from "../src/agents.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -704,4 +705,59 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     else process.env.CFIND_CODEX_BIN = prior;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+test("headless Claude agents report usage limits like the statusline", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-limits-")),
+    binary = join(dir, "claude"),
+    prior = process.env.CFIND_CLAUDE_BIN;
+  writeFileSync(binary, `#!/usr/bin/env node
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ if(JSON.parse(line).type!=='user')return;
+ const out=o=>console.log(JSON.stringify(o));
+ out({type:'system',subtype:'init',session_id:'headless',model:'haiku'});
+ out({type:'rate_limit_event',session_id:'headless',rate_limit_info:{utilization:0.78,unifiedWindows:{five_hour:{utilization:0.13,resetsAt:1793262000},seven_day:{utilization:0.78,resetsAt:1793408400}}}});
+ // An event without the numbers must not replace the good one.
+ out({type:'rate_limit_event',session_id:'headless',rate_limit_info:{status:'allowed'}});
+ out({type:'result',subtype:'success',result:'done'});
+});`, { mode: 0o700 });
+  const data = join(dir, "data"),
+    profiles = [{ id: "personal", source: "claude" as const, label: "Personal", path: dir }];
+  mkdirSync(data);
+  process.env.CFIND_CLAUDE_BIN = binary;
+  const w = new AgentWorkspace(profiles, data);
+  try {
+    await w.create("personal", dir, "hi");
+    const deadline = Date.now() + 4000;
+    while (w.snapshot().agents.some(a => a.state !== "idle")) {
+      if (Date.now() > deadline) throw new Error("Agent start timed out");
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const files = readdirSync(join(data, "signals"));
+    assert.equal(files.length, 1);
+    const signal = JSON.parse(readFileSync(join(data, "signals", files[0]!), "utf8"));
+    assert.equal(signal.kind, "statusline");
+    assert.equal(signal.profile, "personal");
+    assert.equal(signal.sessionId, "headless");
+    assert.deepEqual(signal.rate_limits, {
+      five_hour: { used_percentage: 13, resets_at: 1793262000 },
+      seven_day: { used_percentage: 78, resets_at: 1793408400 },
+    });
+    const limits = new Monitor({ roots: profiles, dataDir: data }).snapshot().profiles[0]!.limits!;
+    assert.equal(limits.session!.used, 13);
+    assert.equal(limits.week!.used, 78);
+    assert.equal(limits.session!.resetsAt, 1793262000);
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;
+    else process.env.CFIND_CLAUDE_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("claudeRateLimits keeps only windows with numbers", () => {
+  assert.equal(claudeRateLimits(undefined), undefined);
+  assert.equal(claudeRateLimits({ utilization: 0.5, resetsAt: 1 }), undefined);
+  assert.deepEqual(
+    claudeRateLimits({ unifiedWindows: { five_hour: { utilization: 0.4 }, seven_day: { utilization: 0.255, resetsAt: 9 } } }),
+    { seven_day: { used_percentage: 26, resets_at: 9 } },
+  );
 });
