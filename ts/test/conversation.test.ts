@@ -447,6 +447,27 @@ test("commands run in Claude Code's terminal show as one grey line", () => {
         promptId: "p4",
         message: { content: "can this not be solved?" },
       },
+      caveat("p5"),
+      {
+        type: "user",
+        uuid: "g",
+        promptId: "p5",
+        message: { content: "<command-name>/compact</command-name>" },
+      },
+      {
+        type: "user",
+        uuid: "h",
+        promptId: "p5",
+        message: { content: "<local-command-stdout>Compacted</local-command-stdout>" },
+      },
+      // Typed while /compact ran: same promptId, but the user's own message.
+      {
+        type: "user",
+        uuid: "i",
+        promptId: "p5",
+        origin: { kind: "human" },
+        message: { content: "once done, check the other cluster" },
+      },
     ]),
   );
   try {
@@ -457,6 +478,8 @@ test("commands run in Claude Code's terminal show as one grey line", () => {
         ["note", "/model opus: Set model to Opus 5.5"],
         ["note", "/clear"],
         ["user", "can this not be solved?"],
+        ["note", "/compact: Compacted"],
+        ["user", "once done, check the other cluster"],
       ],
     );
   } finally {

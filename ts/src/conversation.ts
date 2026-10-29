@@ -251,7 +251,9 @@ class Parser {
       }
       const local =
         localCommand(content) ??
+        // A message typed while a command runs can get the command's promptId.
         (!entry["isMeta"] &&
+        entry["origin"]?.kind !== "human" &&
         entry["promptId"] &&
         this.localPrompts.has(entry["promptId"])
           ? { output: content }
