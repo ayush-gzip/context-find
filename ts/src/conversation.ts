@@ -387,25 +387,28 @@ export class ConversationReader {
       this.offset = 0;
       this.pending = Buffer.alloc(0);
     }
-    const fd = openSync(this.path, "r");
-    try {
-      const chunk = Buffer.alloc(4 * 1024 * 1024);
-      let at = this.offset + this.pending.length;
-      while (at < st.size) {
-        const n = readSync(
-          fd,
-          chunk,
-          0,
-          Math.min(chunk.length, st.size - at),
-          at,
-        );
-        if (!n) break;
-        at += n;
-        this.lines(Buffer.concat([this.pending, chunk.subarray(0, n)]));
-        this.parser?.trim();
+    let at = this.offset + this.pending.length;
+    // An open chat checks every second; most checks find nothing new.
+    if (at < st.size) {
+      const fd = openSync(this.path, "r");
+      try {
+        const chunk = Buffer.allocUnsafe(Math.min(4 * 1024 * 1024, st.size - at));
+        while (at < st.size) {
+          const n = readSync(
+            fd,
+            chunk,
+            0,
+            Math.min(chunk.length, st.size - at),
+            at,
+          );
+          if (!n) break;
+          at += n;
+          this.lines(Buffer.concat([this.pending, chunk.subarray(0, n)]));
+          this.parser?.trim();
+        }
+      } finally {
+        closeSync(fd);
       }
-    } finally {
-      closeSync(fd);
     }
     // A last line without its newline still counts once it is complete JSON, as in
     // a full read. A later newline then only adds an empty line.

@@ -177,14 +177,15 @@ export function dashboardProfiles(): Profile[] {
   return profiles;
 }
 
+const isTranscript = (path: string) =>
+  path.endsWith(".jsonl") && !basename(path).startsWith("observer-");
 function filesUnder(root: string, files: string[] = []): string[] {
   try {
     for (const e of readdirSync(root, { withFileTypes: true })) {
       if (e.isSymbolicLink()) continue;
       const path = join(root, e.name);
       if (e.isDirectory()) filesUnder(path, files);
-      else if (e.name.endsWith(".jsonl") && !e.name.startsWith("observer-"))
-        files.push(path);
+      else if (isTranscript(path)) files.push(path);
     }
   } catch {
     /* a missing store is not a collection failure */
@@ -398,6 +399,15 @@ export class Monitor {
   private listeners = new Set<() => void>();
   private generation = 0;
   private copies?: { generation: number; byPath: Map<string, Copies> };
+  /** Transcripts the folder watchers reported since the last tick. */
+  private dirty = new Map<string, Profile>();
+  private watched = new Set<string>();
+  private scannedAt = 0;
+  private savedAt = 0;
+  private unsaved = false;
+  private notifiedAt = 0;
+  private nudged = false;
+  private signals = new Map<string, { ino: number; mtime: number; size: number; value: any }>();
   constructor(options: { roots?: Profile[]; dataDir?: string } = {}) {
     this.roots = options.roots ?? dashboardProfiles();
     this.dataDir = options.dataDir ?? monitorDir();
@@ -416,6 +426,21 @@ export class Monitor {
   }
   start() {
     if (!this.timer) {
+      // The tick reads only the transcripts these report; a walk of every
+      // folder once a minute catches anything they miss.
+      for (const root of this.roots)
+        try {
+          const w = watch(root.path, { recursive: true }, (_, name) => {
+            if (name) this.dirty.set(join(root.path, String(name)), root);
+          });
+          w.on("error", () => {
+            w.close();
+            this.watched.delete(root.path);
+          });
+          w.unref();
+          this.watchers.push(w);
+          this.watched.add(root.path);
+        } catch {}
       void this.refresh();
       this.timer = setInterval(() => {
         void this.refresh();
@@ -436,7 +461,10 @@ export class Monitor {
       ];
       for (const dir of dirs)
         try {
-          const w = watch(dir, () => this.soon());
+          const w = watch(dir, () => {
+            this.nudged = true;
+            this.soon();
+          });
           w.on("error", () => w.close());
           w.unref();
           this.watchers.push(w);
@@ -448,6 +476,8 @@ export class Monitor {
     this.timer = null;
     for (const w of this.watchers) w.close();
     this.watchers = [];
+    this.watched.clear();
+    if (this.unsaved) this.save();
   }
   /** Refreshes soon, at most every 200 ms however often the folders change. */
   private soon() {
@@ -470,12 +500,23 @@ export class Monitor {
     return this.busy;
   }
   private async collect() {
-    const active = new Set<string>();
+    const active = new Set<string>(),
+      walked = new Set<string>(),
+      full = Date.now() - this.scannedAt > 60000,
+      dirty = this.dirty;
+    this.dirty = new Map();
+    if (full) this.scannedAt = Date.now();
     this.errors = [];
     let changed = false;
-    for (const profile of this.roots)
-      for (const path of filesUnder(profile.path)) {
-        active.add(path);
+    for (const profile of this.roots) {
+      const walk = full || !this.watched.has(profile.path),
+        paths = walk ? filesUnder(profile.path) : [];
+      if (walk) walked.add(profile.id);
+      else
+        for (const [path, root] of dirty)
+          if (root === profile && isTranscript(path)) paths.push(path);
+      for (const path of paths) {
+        if (walk) active.add(path);
         try {
           const st = statSync(path);
           let f = this.cache[path];
@@ -515,30 +556,64 @@ export class Monitor {
           f.session.updatedAt = Math.max(f.session.updatedAt, st.mtimeMs);
           changed = true;
         } catch (e) {
-          this.errors.push(`${basename(path)}: ${(e as Error).message}`);
+          if (!walk && (e as NodeJS.ErrnoException).code === "ENOENT") {
+            if (this.cache[path]) {
+              delete this.cache[path];
+              changed = true;
+            }
+          } else this.errors.push(`${basename(path)}: ${(e as Error).message}`);
         }
       }
-    for (const key of Object.keys(this.cache))
-      if (!active.has(key)) {
-        delete this.cache[key];
-        changed = true;
-      }
+    }
+    if (walked.size)
+      for (const [key, f] of Object.entries(this.cache))
+        if (!active.has(key) && (full || walked.has(f.session.profile))) {
+          delete this.cache[key];
+          changed = true;
+        }
     this.updatedAt = Date.now();
     if (changed) {
       this.generation++;
-      mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
-      const path = join(this.dataDir, "metrics.json");
-      writeFileSync(
-        path + ".tmp",
-        JSON.stringify({ version: 4, files: this.cache }),
-        { mode: 0o600 },
-      );
-      renameSync(path + ".tmp", path);
+      this.unsaved = true;
     }
+    // The whole cache is megabytes of JSON; a minute of progress is cheap to redo.
+    if (this.unsaved && Date.now() - this.savedAt > 60000) this.save();
+    // Without news, a tick every 10 s still moves time-based states (stale).
+    if (!changed && !this.nudged && Date.now() - this.notifiedAt < 10000) return;
+    this.nudged = false;
+    this.notifiedAt = Date.now();
     for (const listener of this.listeners)
       try {
         listener();
       } catch {}
+  }
+  private save() {
+    mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
+    const path = join(this.dataDir, "metrics.json");
+    writeFileSync(
+      path + ".tmp",
+      JSON.stringify({ version: 4, files: this.cache }),
+      { mode: 0o600 },
+    );
+    renameSync(path + ".tmp", path);
+    this.savedAt = Date.now();
+    this.unsaved = false;
+  }
+  /** A signal file, parsed again only when it is replaced. */
+  private signal(path: string, next: Monitor["signals"]) {
+    const st = statSync(path),
+      hit = this.signals.get(path);
+    const entry =
+      hit && hit.ino === st.ino && hit.mtime === st.mtimeMs && hit.size === st.size
+        ? hit
+        : {
+            ino: st.ino,
+            mtime: st.mtimeMs,
+            size: st.size,
+            value: JSON.parse(readFileSync(path, "utf8")),
+          };
+    next.set(path, entry);
+    return entry.value;
   }
   /** Claude message IDs repeat across files (resumed or forked sessions, subagent
    *  copies). Per profile, the file whose session started first owns each ID; the
@@ -547,26 +622,29 @@ export class Monitor {
   private duplicates() {
     if (this.copies?.generation === this.generation) return this.copies.byPath;
     const byPath = new Map<string, Copies>(),
-      owners = new Set<string>();
+      owners = new Map<string, Set<string>>();
     const files = Object.entries(this.cache)
       .filter(([, f]) => f.session.source === "claude")
       .sort(
         ([pa, a], [pb, b]) =>
           a.session.startedAt - b.session.startedAt || (pa < pb ? -1 : 1),
       );
-    for (const [path, f] of files)
-      for (const [id, tokens] of Object.entries(f.seen)) {
-        const key = f.session.profile + "|" + id;
-        if (!owners.has(key)) {
-          owners.add(key);
+    for (const [path, f] of files) {
+      let owned = owners.get(f.session.profile);
+      if (!owned) owners.set(f.session.profile, (owned = new Set()));
+      for (const id in f.seen) {
+        if (!owned.has(id)) {
+          owned.add(id);
           continue;
         }
+        const tokens = f.seen[id]!;
         let c = byPath.get(path);
         if (!c) byPath.set(path, (c = { tokens: zero(), buckets: {} }));
         add(c.tokens, tokens);
         const slot = f.slot[id];
         if (slot) add((c.buckets[slot] ??= zero()), tokens);
       }
+    }
     this.copies = { generation: this.generation, byPath };
     return byPath;
   }
@@ -691,6 +769,17 @@ export class Monitor {
         add(models.get(mk)!.tokens, b.tokens);
       }
     }
+    // Signals and live records name sessions by id; a scan of every session for each is slow.
+    const byId = new Map<string, ObservedSession[]>();
+    for (const s of sessions) {
+      const list = byId.get(s.id);
+      if (list) list.push(s);
+      else byId.set(s.id, [s]);
+    }
+    const find = (id: unknown, profile?: string) =>
+      byId
+        .get(String(id))
+        ?.find((s) => profile === undefined || s.profile === profile);
     const activity: any[] = [],
       costs: {
         profile: string;
@@ -699,18 +788,17 @@ export class Monitor {
         updatedAt: number;
       }[] = [];
     try {
+      const parsed: Monitor["signals"] = new Map();
       for (const name of readdirSync(join(this.dataDir, "signals"))) {
         if (!name.endsWith(".json")) continue;
         try {
-          const signal = JSON.parse(
-            readFileSync(join(this.dataDir, "signals", name), "utf8"),
-          );
+          const signal = this.signal(join(this.dataDir, "signals", name), parsed);
           if (!profiles.some((p) => p.id === signal.profile)) continue;
           if (signal.kind === "statusline") {
             // The hook's profile tag can be wrong: a session in the home folder also
             // loads ~/.claude/settings.json as project settings. The transcript decides.
             const owner =
-                sessions.find((s) => s.id === signal.sessionId)?.profile ??
+                find(signal.sessionId)?.profile ??
                 signal.profile,
               p = profiles.find((p) => p.id === owner)!;
             const limits = parseLimits(signal.rate_limits, signal.updatedAt);
@@ -729,15 +817,12 @@ export class Monitor {
           } else activity.push(signal);
         } catch {}
       }
+      this.signals = parsed;
     } catch {}
     for (const a of activity) {
-      const s = sessions.find(
-        (s) =>
-          s.profile === a.profile &&
-          (a.agentId
-            ? s.id === a.agentId || s.id === "agent-" + a.agentId
-            : s.id === a.sessionId),
-      );
+      const s = a.agentId
+        ? (find(a.agentId, a.profile) ?? find("agent-" + a.agentId, a.profile))
+        : find(a.sessionId, a.profile);
       if (s) {
         s.state =
           Date.now() - a.updatedAt > 120000 && a.state === "running"
@@ -757,9 +842,7 @@ export class Monitor {
     };
     const shells = new Set<ObservedSession>();
     for (const live of this.liveRecords()) {
-      const s = sessions.find(
-        (s) => s.profile === live.profile && s.id === live.sessionId,
-      );
+      const s = find(live.sessionId, live.profile);
       if (!s) continue;
       s.state = states[live.status] ?? "unknown";
       if (live.status === "shell") shells.add(s);

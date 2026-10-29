@@ -383,3 +383,50 @@ test("session titles drop Claude's paste tags", async () => {
     rmSync(f.home, { recursive: true, force: true });
   }
 });
+test("after start, watched folders are read without a full walk; clients hear only changes", async () => {
+  const f = fixture();
+  const monitor = new Monitor(f.options);
+  let heard = 0;
+  monitor.subscribe(() => heard++);
+  const until = async (ok: () => boolean) => {
+    for (const end = Date.now() + 4000; !ok(); ) {
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((r) => setTimeout(r, 50));
+      await monitor.refresh();
+    }
+  };
+  const output = () =>
+    monitor.snapshot().profiles.find((p) => p.id === "personal")!.tokens.output;
+  try {
+    monitor.start();
+    await monitor.refresh();
+    // macOS starts delivering folder events a moment after the watch begins.
+    await new Promise((r) => setTimeout(r, 500));
+    // Within the first minute only the watchers can report these.
+    const dir = join(f.roots[1]!.path, "new-project"),
+      path = join(dir, "s2.jsonl");
+    mkdirSync(dir);
+    writeFileSync(path, JSON.stringify(claude("m1", 7)) + "\n");
+    await until(() => monitor.snapshot().sessions.length === 1);
+    appendFileSync(path, JSON.stringify(claude("m2", 3)) + "\n");
+    await until(() => output() === 10);
+    const before = heard;
+    await monitor.refresh();
+    await monitor.refresh();
+    assert.equal(heard, before, "no change, no update");
+    // stop() saves what the minute's limit held back.
+    monitor.stop();
+    assert.equal(
+      new Monitor(f.options).snapshot().profiles.find((p) => p.id === "personal")!
+        .tokens.output,
+      10,
+    );
+    monitor.start();
+    await new Promise((r) => setTimeout(r, 500));
+    rmSync(path);
+    await until(() => monitor.snapshot().sessions.length === 0);
+  } finally {
+    monitor.stop();
+    rmSync(f.home, { recursive: true, force: true });
+  }
+});
