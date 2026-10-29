@@ -2243,8 +2243,11 @@ document.addEventListener("keydown", (e) => {
     navigate(pages[n - 1]);
   }
   // Escape in an open dialog closes only the dialog; otherwise it closes the chat.
-  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]") && S.view)
+  // Handled here, so the Mac app does not also leave full screen.
+  if (e.key === "Escape" && !e.isComposing && !$("dialog[open]") && S.view) {
+    e.preventDefault();
     leaveChat();
+  }
   if (
     e.key === "Enter" &&
     !e.shiftKey &&
