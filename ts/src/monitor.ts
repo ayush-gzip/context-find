@@ -64,6 +64,8 @@ export interface ObservedSession {
   open?: boolean;
   /** That process runs in a tmux pane, so input can be typed into it. */
   tmux?: boolean;
+  /** The turn ended, but a command it started in the background still runs. */
+  shell?: boolean;
   tokens: Tokens;
   usageAvailable: boolean;
   /** The turn ended and the agent waits for the user's answer to this. */
@@ -835,31 +837,26 @@ export class Monitor {
       idle: "idle",
       busy: "running",
       running: "running",
-      // The turn ended but background shell tasks still run.
-      shell: "running",
+      // The turn ended; a background command still runs (marked `shell`).
+      shell: "idle",
       waiting: "waiting",
       waiting_for_input: "waiting",
     };
-    const shells = new Set<ObservedSession>();
     for (const live of this.liveRecords()) {
       const s = find(live.sessionId, live.profile);
       if (!s) continue;
       s.state = states[live.status] ?? "unknown";
-      if (live.status === "shell") shells.add(s);
+      if (live.status === "shell") s.shell = true;
       s.open = true;
       s.tmux = !!live.tmux || undefined;
       s.updatedAt = Math.max(s.updatedAt, live.updatedAt);
     }
     // Once the turn has ended: the agent's own `cfind ask`, else its last paragraph.
-    // A turn that ends on a question waits for the user even while a background
-    // shell still runs; without a question, Claude may go on when the shell ends.
+    // This holds while a background command still runs, too.
     for (const s of sessions) {
       const f = this.cache[s.path],
-        ended = s.state === "idle" || shells.has(s),
-        ask = ended ? (f?.ask ?? askReply(f?.reply)) : undefined;
-      if (!ask) continue;
-      s.ask = ask;
-      s.state = "idle";
+        ask = s.state === "idle" ? (f?.ask ?? askReply(f?.reply)) : undefined;
+      if (ask) s.ask = ask;
     }
     return {
       updatedAt: this.updatedAt,

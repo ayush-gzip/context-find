@@ -248,7 +248,8 @@ test("a Claude session with a live process is open even when idle", async () => 
     assert.equal(s("s1").open, true);
     assert.equal(s("s1").tmux, true);
     assert.equal(s("s2").open, undefined);
-    assert.equal(s("s4").state, "running");
+    assert.equal(s("s4").state, "idle");
+    assert.equal(s("s4").shell, true);
     assert.equal(monitor.live("claude", "s1")!.tmux, "%9");
     const codexStyle = monitor
       .snapshot()

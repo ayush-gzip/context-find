@@ -148,7 +148,7 @@ test("sessions show the question once the turn ends, until the user answers", as
     assert.equal(ask("shellask"), "Your call: ship it?");
     assert.equal(state("shellask"), "idle");
     assert.equal(ask("shellplain"), undefined);
-    assert.equal(state("shellplain"), "running");
+    assert.equal(state("shellplain"), "idle");
     assert.equal(ask("cx"), "Pick A or B?");
     assert.equal(monitor.snapshot().sessions.find((s) => s.id === "explicit")!.state, "idle");
   } finally {

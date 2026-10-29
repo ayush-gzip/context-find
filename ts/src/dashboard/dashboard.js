@@ -385,7 +385,7 @@ function kids(children) {
   return `${children.length} subagent${children.length === 1 ? "" : "s"}${live ? ` · ${live} running` : ""}`;
 }
 function agentCard(a) {
-  return `<div><button class="agent-card" data-agent="${esc(a.id)}" data-owned="${a.owned ? "1" : "0"}" data-profile-id="${esc(a.profile)}" style="width:100%"><div class="agent-top"><span><i class="state-dot ${esc(a.state)}"></i>${esc(state(a.state))}</span><span>${a.owned ? "In workspace" : "External session"}</span></div><h3>${esc(a.title || "Agent session")}</h3><div class="agent-meta">${esc(folder(a.cwd))}</div><div class="agent-bottom"><span style="color:${colors[a.profile] || colors.claude}">${esc(profileLabel(a.profile))}</span><span>${esc(a.model || "Default model")} · ${elapsed(a.startedAt)}</span></div>${a.queue?.length ? `<div class="agent-meta" style="margin-top:12px">${a.queue.length} prompt${a.queue.length === 1 ? "" : "s"} queued</div>` : ""}</button>${a.children?.length ? `<details class="subagents" data-parent="${esc(a.id)}"${S.openKids.has(a.id) ? " open" : ""}><summary>${kids(a.children)}</summary><div class="agent-children">${a.children.map((c) => `<div class="child-card" role="button" tabindex="0" data-child="${esc(c.id)}" data-profile-id="${esc(a.profile)}"><span class="child-task"><span class="state-dot ${esc(c.state)}"></span> ${esc(c.task)}</span><small><span>↳ ${esc(state(c.state))}</span><span>${esc(c.model || "Subagent")}</span></small></div>`).join("")}</div></details>` : ""}</div>`;
+  return `<div><button class="agent-card" data-agent="${esc(a.id)}" data-owned="${a.owned ? "1" : "0"}" data-profile-id="${esc(a.profile)}" style="width:100%"><div class="agent-top"><span><i class="state-dot ${esc(a.state)}"></i>${esc(state(a.state))}${a.shell && a.state === "idle" ? " · background command running" : ""}</span><span>${a.owned ? "In workspace" : "External session"}</span></div><h3>${esc(a.title || "Agent session")}</h3><div class="agent-meta">${esc(folder(a.cwd))}</div><div class="agent-bottom"><span style="color:${colors[a.profile] || colors.claude}">${esc(profileLabel(a.profile))}</span><span>${esc(a.model || "Default model")} · ${elapsed(a.startedAt)}</span></div>${a.queue?.length ? `<div class="agent-meta" style="margin-top:12px">${a.queue.length} prompt${a.queue.length === 1 ? "" : "s"} queued</div>` : ""}</button>${a.children?.length ? `<details class="subagents" data-parent="${esc(a.id)}"${S.openKids.has(a.id) ? " open" : ""}><summary>${kids(a.children)}</summary><div class="agent-children">${a.children.map((c) => `<div class="child-card" role="button" tabindex="0" data-child="${esc(c.id)}" data-profile-id="${esc(a.profile)}"><span class="child-task"><span class="state-dot ${esc(c.state)}"></span> ${esc(c.task)}</span><small><span>↳ ${esc(state(c.state))}</span><span>${esc(c.model || "Subagent")}</span></small></div>`).join("")}</div></details>` : ""}</div>`;
 }
 function activeCanvas() {
   const agents = allAgents().filter((a) =>
@@ -919,7 +919,8 @@ function followSession() {
   if (S.view?.kind !== "session" || S.view.s.host || !S.chat) return;
   const s = S.metrics?.sessions.find((x) => x.path === S.view.s.path);
   if (!s) return;
-  S.view.s = { ...S.view.s, ...s };
+  // The live list drops a flag when it ends; the merge would keep the old one.
+  S.view.s = { ...S.view.s, shell: undefined, ...s };
   // Each reload reads the whole transcript, so a busy session reloads at most every 3s.
   if (!S.chatStream && s.updatedAt !== S.chat.loadedAt && !S.chat.loading) {
     const chat = S.chat;
@@ -967,6 +968,11 @@ function chatItems(a, s) {
       html: `<div class="msg agent"><div class="bubble typing" aria-label="${esc(label)} is working"><i></i><i></i><i></i></div><div class="msg-meta"><span data-since="${asked || Date.now()}">Working</span></div></div>`,
     });
   }
+  if (!a && s.shell && s.state === "idle")
+    items.push({
+      key: "shell",
+      html: `<div class="chat-note">Done · a background command is still running</div>`,
+    });
   (a?.queue || []).forEach((q, i) =>
     items.push({
       key: `q:${i}:${q.text.length}:${q.images?.length || 0}`,
