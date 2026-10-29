@@ -2225,9 +2225,9 @@ document.addEventListener("keydown", (e) => {
     openPalette();
   }
   if (shortcut(e)) e.preventDefault();
-  // ⌥⌘F in the Mac app: Option turns the key into "ƒ", so match the key's position.
+  // ⌃⌘F in the Mac app, the usual macOS full-screen key.
   const app = window.webkit?.messageHandlers?.cfind;
-  if (app && e.metaKey && e.altKey && e.code === "KeyF") {
+  if (app && e.metaKey && e.ctrlKey && e.code === "KeyF") {
     e.preventDefault();
     app.postMessage("window:fullscreen");
   }
