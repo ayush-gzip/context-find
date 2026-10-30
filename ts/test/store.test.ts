@@ -9,10 +9,9 @@ import { fileURLToPath } from "node:url";
 import { relativeTime, conversationCounts, detectSource, header, renderTranscript, searchLocalTranscripts } from "../src/store.ts";
 import { debug } from "../src/debug.ts";
 import { appendHostSpec, buildHostSpec, hostDisplayName, readHosts, splitSpecTokens, buildSshArgv,
-         readAgentSource as readSourceAgent, buildResumeCommand } from "../src/remote.ts";
+         readAgentSource as readSourceAgent } from "../src/remote.ts";
 import * as remote from "../src/remote.ts";
-import { clampScrollTop, sessionRow } from "../src/rows.ts";
-import * as rows from "../src/rows.ts";
+import { machineRow } from "../src/terminal.ts";
 import { Search } from "../src/search.ts";
 
 const CONVO = [
@@ -152,15 +151,6 @@ test("agent command transports arguments without shell quoting", () => {
   "py -3 - --args-base64 WyItLXNjYW4iLCJ0d28gd29yZHMiLCIxMDAlIl0");
   assert.equal(remoteAgentCommand("box # context-find:os=posix python=/opt/py/bin/python3", ["--conversation-counts"]),
     "/opt/py/bin/python3 - --args-base64 WyItLWNvbnZlcnNhdGlvbi1jb3VudHMiXQ");
-});
-
-test("Windows resume command uses encoded PowerShell with literal arguments", () => {
-  const command = buildResumeCommand("box # context-find:os=windows", String.raw`C:\O'Brien\app`,
-    "session'1", ["codex", "resume"]);
-  const encoded = command.match(/^powershell\.exe -NoProfile -EncodedCommand (.+)$/)?.[1];
-  assert.ok(encoded);
-  assert.equal(Buffer.from(encoded, "base64").toString("utf16le"),
-    "Set-Location -LiteralPath 'C:\\O''Brien\\app'\n& 'codex' 'resume' 'session''1'");
 });
 
 test("debug logging reads the runtime environment", () => {
@@ -331,93 +321,11 @@ test("source modules do not fall back to the repository agent asset", () => {
   assert.throws(() => readSourceAgent(), /cannot find store\.py/);
 });
 
-test("scroll keeps the cursor in view", () => {
-  assert.equal(clampScrollTop(0, 0, 10), 0);
-  assert.equal(clampScrollTop(0, 25, 10), 16);
-  assert.equal(clampScrollTop(20, 3, 10), 3);
-});
-
-test("vertical motion accepts Vim keys and arrow keys", () => {
-  const verticalMotion = (rows as unknown as {
-    verticalMotion(input: string, key: { upArrow: boolean; downArrow: boolean; ctrl?: boolean }): number;
-  }).verticalMotion;
-  assert.equal(verticalMotion("j", { upArrow: false, downArrow: false }), 1);
-  assert.equal(verticalMotion("k", { upArrow: false, downArrow: false }), -1);
-  assert.equal(verticalMotion("j", { upArrow: false, downArrow: false, ctrl: true }), 1);
-  assert.equal(verticalMotion("k", { upArrow: false, downArrow: false, ctrl: true }), -1);
-  assert.equal(verticalMotion("", { upArrow: true, downArrow: false }), -1);
-  assert.equal(verticalMotion("", { upArrow: false, downArrow: true }), 1);
-});
-
-test("conversation header aligns every visible column", () => {
-  const tableHeader = (rows as unknown as { tableHeader(width: number): string }).tableHeader;
-  const line = tableHeader(100);
-  assert.equal(line.indexOf("DATE"), 0);
-  assert.equal(line.indexOf("AGENT"), 14);
-  assert.equal(line.indexOf("MACHINE"), 21);
-  assert.equal(line.indexOf("DIR"), 32);
-  assert.equal(line.indexOf("BRANCH"), 57);
-  assert.equal(line.indexOf("PREVIEW"), 67);
-  assert.ok(tableHeader(80).includes("PREVIEW"));
-});
-
-test("normal and search modes keep Vim shortcuts separate from filter text", () => {
-  const listAction = (rows as unknown as {
-    listAction(input: string, key: object, searching: boolean): string;
-  }).listAction;
-  assert.equal(listAction("j", {}, false), "down");
-  assert.equal(listAction("k", {}, false), "up");
-  assert.equal(listAction("l", {}, false), "list-machines");
-  assert.equal(listAction("/", {}, false), "search");
-  assert.equal(listAction("v", {}, false), "view");
-  assert.equal(listAction("r", {}, false), "resume");
-  assert.equal(listAction("", { return: true }, false), "resume");
-  assert.equal(listAction("", { return: true }, true), "resume");
-  assert.equal(listAction("", { tab: true }, true), "view");
-  assert.equal(listAction("", { escape: true }, false), "quit");
-  assert.equal(listAction("j", {}, true), "type");
-  assert.equal(listAction("j", { ctrl: true }, true), "down");
-  assert.equal(listAction("k", { ctrl: true }, true), "up");
-  assert.equal(listAction("j", { ctrl: true }, false), "down");
-  assert.equal(listAction("k", { ctrl: true }, false), "up");
-  assert.equal(listAction("l", {}, true), "type");
-  assert.equal(listAction("v", {}, true), "type");
-  assert.equal(listAction("", { escape: true }, true), "normal");
-  // Ctrl+D is deep search in either mode; a plain "d" while typing stays filter text
-  assert.equal(listAction("d", { ctrl: true }, false), "deep");
-  assert.equal(listAction("d", { ctrl: true }, true), "deep");
-  assert.equal(listAction("d", {}, true), "type");
-});
-
 test("machine rows show counts and unavailable states", () => {
-  const machineRow = (rows as unknown as {
-    machineRow(name: string, tally: Record<string, number> | null, status: string): string[];
-  }).machineRow;
   assert.deepEqual(machineRow("mini", { claude: 2, codex: 3 }, "ready in 0.2s"),
     ["mini", "2", "3", "5", "never", "ready in 0.2s"]);
   assert.deepEqual(machineRow("box", null, "unreachable"),
     ["box", "-", "-", "-", "-", "unreachable"]);
-});
-
-test("machine table keeps a gap between every column", () => {
-  const machineLine = (rows as unknown as {
-    machineLine(cells: string[], width: number): string;
-  }).machineLine;
-  const line = machineLine(["box", "2", "3", "5", "never", "ready"], 80);
-  assert.match(line, /\s5\s+never\s+ready$/);
-});
-
-test("row text truncates long paths from the left and long branches from the right", () => {
-  const cell = sessionRow({
-    path: "/x/a.jsonl", cwd: "/very/deep/nested/path/that/keeps/going/onwards/forever",
-    branch: "feat/a-very-long-branch-name", summary: "hi", mtime: 1_760_000_000,
-    host: null, source: "codex",
-  });
-  assert.ok(cell.folder.startsWith("…"));
-  assert.equal(cell.folder.length, 24);
-  assert.ok(cell.branch.endsWith("…"));
-  assert.equal(cell.branch.length, 9);
-  assert.equal(cell.host, "local");
 });
 
 test("search returns local rows before an unreachable host resolves", async () => {

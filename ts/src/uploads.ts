@@ -15,7 +15,8 @@ import { monitorDir } from "./monitor.ts";
 
 export const MAX_UPLOAD = 10 * 1024 * 1024,
   MAX_IMAGES = 4;
-const KEEP_MS = 30 * 24 * 3600 * 1000,
+// Attached screenshots can hold private text, so they are not kept long.
+const KEEP_MS = 7 * 24 * 3600 * 1000,
   ID = /^[0-9a-f]{32}\.(png|jpg|gif|webp)$/,
   TYPES: Record<string, string> = {
     png: "image/png",
@@ -39,14 +40,42 @@ export function saveUpload(bytes: Buffer) {
   const ext = sniff(bytes);
   if (!ext) return undefined;
   mkdirSync(dir(), { recursive: true, mode: 0o700 });
-  for (const name of readdirSync(dir()))
-    try {
-      if (Date.now() - statSync(join(dir(), name)).mtimeMs > KEEP_MS)
-        rmSync(join(dir(), name), { force: true });
-    } catch {}
+  pruneUploads();
   const id = randomBytes(16).toString("hex") + "." + ext;
   writeFileSync(join(dir(), id), bytes, { mode: 0o600 });
   return id;
+}
+
+/** Removes images older than a week, or with `all` every image not in `keep`.
+ *  Returns how many were removed. */
+export function pruneUploads(all = false, keep = new Set<string>()) {
+  let names: string[] = [],
+    removed = 0;
+  try {
+    names = readdirSync(dir());
+  } catch {}
+  for (const name of names)
+    try {
+      if (keep.has(name)) continue;
+      if (all || Date.now() - statSync(join(dir(), name)).mtimeMs > KEEP_MS) {
+        rmSync(join(dir(), name), { force: true });
+        removed++;
+      }
+    } catch {}
+  return removed;
+}
+
+export function uploadStats() {
+  let count = 0,
+    bytes = 0;
+  try {
+    for (const name of readdirSync(dir()))
+      try {
+        bytes += statSync(join(dir(), name)).size;
+        count++;
+      } catch {}
+  } catch {}
+  return { count, bytes, keepDays: KEEP_MS / 86400000 };
 }
 
 export function uploadPath(id: unknown) {

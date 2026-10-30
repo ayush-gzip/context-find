@@ -1,15 +1,13 @@
 # context-find
 
-Search every Claude Code and Codex conversation you have ever had — across projects and machines — then jump back into the right one.
+Find every Claude Code and Codex conversation you have ever had, across projects and machines, then read it and keep talking to it from a dashboard.
 
-![context-find demo](assets/demo.gif)
+`context-find` reads your existing local transcripts and does not upload them.
 
-<sub>Demo uses synthetic conversations. `context-find` reads your existing local transcripts and does not upload them.</sub>
-
-- **Claude Code + Codex in one place.** Search both transcript stores with one command.
+- **Claude Code + Codex in one place.** Search both transcript stores at once.
 - **Cross-machine search over SSH.** Search another machine without installing an agent there.
 - **Live local dashboard.** Monitor usage and running agents, browse sessions, and chat through your installed tools.
-- **Optional background daemon.** Refresh local sessions without keeping a terminal or browser open.
+- **A background service.** `cfind` starts it; the dashboard and the Mac and iPhone apps are where you work.
 
 ## Install
 
@@ -28,24 +26,24 @@ git clone https://github.com/ayush-gzip/context-find
 
 The installer clones or updates the repo under `~/.local/share/context-find`, builds it, symlinks `context-find` and the short alias `cfind` into `~/.local/bin`, and adds that directory to your `PATH` in `~/.bashrc` and `~/.zshrc`. Open a new shell afterwards.
 
-Windows works at runtime too: clone the repo, run `npm install && npm run build` inside `ts`, then use Windows Terminal or another VT-capable console.
+Windows works at runtime too: clone the repo and run `npm install && npm run build` inside `ts`.
 
 ## Quick start
 
 ```sh
-context-find                        # browse everything, newest first
-context-find "rate limiter"         # search transcript text
-context-find --codex "docker build" # Codex only
-context-find --list-machines        # see every searchable machine
+cfind                    # start the background service
+cfind daemon install     # also start it at login (macOS) and add the Claude collectors
+cfind --list-machines    # see every machine it can search
 ```
 
-Inside the browser, press `/` to filter, arrows to move, `v` or `tab` to read, `enter` or `r` to resume, and `esc` to leave.
+Then open `http://127.0.0.1:4319`. Search, read, and continue conversations there.
+`cfind` no longer searches in the terminal; a query on the command line is refused.
 
 ## Live dashboard and daemon
 
 ```sh
+cfind                  # same as daemon start
 cfind daemon install   # install collectors and macOS login startup; start now
-cfind web              # open the browser dashboard
 cfind daemon status    # show the running daemon
 cfind daemon stop      # stop it, including the current launchd job
 cfind daemon start     # start collection in the background
@@ -54,9 +52,7 @@ cfind daemon           # same as daemon start
 
 `service` is an alias for `daemon`; `cfind service` alone shows status.
 The dashboard defaults to `http://127.0.0.1:4319`. Use `--port N` when installing
-or starting to select another port. A running daemon is reused by `cfind web`.
-`cfind web` also runs without installing a daemon; that server stops when its
-terminal exits.
+or starting to select another port.
 
 The daemon checks for new and changed transcript files every 1.5 seconds, reads
 only appended records, and sends live updates to the browser. macOS login startup
@@ -143,7 +139,6 @@ Most of the time you remember a phrase instead.
 ## Contents
 
 - [Command reference](#command-reference)
-- [The interface](#the-interface)
 - [Two agents](#two-agents)
 - [Other machines](#other-machines)
 - [Safety](#safety)
@@ -157,37 +152,19 @@ Most of the time you remember a phrase instead.
 ## Command reference
 
 ```
-context-find [query] [options]
+cfind [daemon start|stop|status|install] [options]
 ```
-
-| argument | meaning |
-| --- | --- |
-| `query` | text to find anywhere in a transcript. Omit it to browse everything. |
 
 | option | meaning |
 | --- | --- |
-| `--claude` | only Claude Code conversations |
-| `--codex` | only Codex conversations |
-| `--host SSH` | also search this ssh host. Repeatable. |
-| `--local` | ignore the hosts in `~/.context-find/hosts` |
-| `--extra-dir DIR` | also search this Claude config dir, for example `~/.claude-personal`. Repeatable. Resume runs Claude with `CLAUDE_CONFIG_DIR` set to the dir that holds the session. |
+| `--extra-dir DIR` | also read this Claude config dir, for example `~/.claude-personal`. Repeatable. |
 | `--onboard-external` | add an SSH machine interactively |
-| `--debug` | print application diagnostics to stderr |
-| `--list` | print results as plain text instead of opening the browser |
 | `--list-machines` | show every machine that can be searched, and what it holds |
+| `--port N` | dashboard port (default 4319) |
+| `--debug` | print application diagnostics to stderr |
 | `-h`, `--help` | usage |
 
-With no `--claude` or `--codex`, both are searched.
-
-`--list` output is designed to be piped. Each result prints its location, its first prompt, and a copy-pasteable command that resumes it:
-
-```
-2026-08-11 09:43  codex   ~/projects/api-gateway  [-]
-  add retry with exponential backoff
-  cd /home/you/projects/api-gateway && codex resume 019fef02-9ecc-7bb0-8f8c-c3af852b6cd6
-```
-
-The browser is skipped automatically when output is not a terminal, so `context-find auth | less` and cron jobs behave.
+With no command, `cfind` starts the service (`daemon start`).
 
 ### `--list-machines`
 
@@ -212,42 +189,6 @@ Exits non-zero if any machine failed to answer, so it works as a health check.
 
 ---
 
-## The interface
-
-**List screen**
-
-| key | action |
-| --- | --- |
-| `/` | enter search mode; type to narrow the visible rows |
-| `j` `↓` | move down |
-| `k` `↑` | move up |
-| `PgUp` `PgDn` `Home` `End` | jump |
-| `enter` `r` | resume the selected conversation |
-| `v` `tab` | open/read the conversation |
-| `l` | open the in-app `list-machines` view |
-| `esc` | quit |
-
-In search mode, `esc` returns to normal mode. Each row shows when it was last active, the agent, the machine (`local` for this machine), the working directory, the git branch, and the first real thing you typed.
-
-In the `list-machines` view, `q`, `h`, left arrow or `esc` returns to the conversation list.
-
-The search argument and the live filter do different jobs. The argument matches **raw transcript text**, so it finds anything anyone said, including tool output. Pressing `/` and typing in the list applies an instant second filter to the rows already found, matching only what is visible in the row.
-
-**Reader screen**
-
-| key | action |
-| --- | --- |
-| `j` `↓` | scroll down |
-| `k` `↑` | scroll up |
-| `PgUp` `PgDn` `space` `Home` `End` | scroll by page |
-| `t` | show or hide tool results, reasoning and injected preambles |
-| `enter` `r` | resume this conversation, in its own directory, with its own tool |
-| `q` `esc` | back to the list |
-
-The reader shows a rendered conversation, not raw JSON: speaker rules, wrapped text, and tool calls collapsed to one line each.
-
----
-
 ## Two agents
 
 Claude Code and Codex both keep local transcripts, in different places and different formats. `context-find` reads both, shows them in one list with a coloured badge per row, and hands each back to the tool that owns it.
@@ -261,9 +202,9 @@ Claude Code and Codex both keep local transcripts, in different places and diffe
 | turns | flat `type: user` records | `response_item` envelopes |
 | git branch | recorded | not recorded, shown as `-` |
 | resume | `claude --resume <id>` | `codex resume <uuid>` |
-| noise hidden behind `t` | `<system-reminder>`, hook output, slash-command wrappers, IDE notices | `# AGENTS.md instructions`, reasoning blocks, inter-agent messages |
+| noise hidden | `<system-reminder>`, hook output, slash-command wrappers, IDE notices | `# AGENTS.md instructions`, reasoning blocks, inter-agent messages |
 
-A scan reads both agents in one pass, and `--claude` / `--codex` filter the finished list. Discovery, scanning and the ssh protocol have no notion of a selected agent, so there is one code path rather than a mode threaded through every layer. Reading both costs nothing measurable: a full local scan of 325 transcripts takes about a fifth of a second.
+A scan reads both agents in one pass, and the dashboard's profile filter narrows the finished list. Discovery, scanning and the ssh protocol have no notion of a selected agent, so there is one code path rather than a mode threaded through every layer. Reading both costs nothing measurable: a full local scan of 325 transcripts takes about a fifth of a second.
 
 ---
 
@@ -281,24 +222,15 @@ prod-jump -J bastion.example.com
 
 A line is an ssh target followed by any ssh options you want, passed through unchanged, with a leading `~` in a path expanded. So a host needing a specific key, a non-standard port or a jump box works with no `~/.ssh/config` entry. The optional `context-find:os` suffix selects the remote Python command. Old lines without the suffix default to macOS, Linux or Unix.
 
-Use `context-find --onboard-external` to enter the target and key path, then select the remote OS with the arrow keys.
+Use `cfind --onboard-external` to enter the target and key path, then type `m` or `w` for the remote OS.
 
-Every search then covers those machines too. Local results appear immediately and each host folds its rows in as it answers, so a sleeping machine never delays the interface; the header names the hosts still being searched. Remote rows are tagged with the host, and `r` resumes them over `ssh -t`.
-
-For a one-off machine, or to ignore the file entirely:
-
-```sh
-context-find --host "mini -i ~/.ssh/other_key" "auth bug"
-context-find --local "auth bug"
-```
+Dashboard searches then cover those machines too. Local results appear immediately and each host adds its rows as it answers, so a sleeping machine never delays the page. The service reads the hosts file when it starts, so restart it (`cfind daemon stop && cfind`) after adding a machine. Remote sessions are read-only in the dashboard.
 
 ### Nothing to install on the far side
 
 `context-find` pipes its own scanner to the remote Python over ssh stdin. The remote searches its own transcripts and returns only what matched. There is no agent, no daemon, and no package to keep in sync across machines. Upgrading the tool on your laptop upgrades what runs everywhere.
 
 Requirements on a remote: ssh access with key auth, plus `python3` or `python` on macOS, Linux and Unix, or the `py` launcher on Windows. If the interpreter lives somewhere unusual, `--onboard-external` asks for the exact command and pins it per host in the hosts file's `python=` field.
-
-To resume a session on Windows, the SSH account must have `powershell.exe` and the `claude` or `codex` command on its `PATH`.
 
 ```
 # ~/.context-find/hosts
@@ -311,7 +243,7 @@ A host that is asleep, unreachable or misconfigured prints one warning line and 
 
 ## Safety
 
-Terminal search reads transcripts without modifying them or maintaining a search index. The optional dashboard stores local metrics, transcript metadata, and recent browser-workspace messages. Nothing is uploaded by the collector. Prompts sent through browser agents go to the selected tool’s provider under its existing account. Remote searches run over your existing SSH trust.
+Search reads transcripts without modifying them or maintaining a search index. The dashboard stores local metrics, transcript metadata, and recent browser-workspace messages. Nothing is uploaded by the collector. Prompts sent through browser agents go to the selected tool’s provider under its existing account. Remote searches run over your existing SSH trust.
 
 This is deliberate. Transcripts hold whatever you have pasted into a prompt, which in practice means account identifiers, customer data, internal hostnames and sometimes credentials. A synced or cached copy of that corpus is a far larger thing to protect than the transcripts already sitting under your home directory. The dashboard cache stays on this machine, under your home directory, with private file permissions.
 
@@ -321,7 +253,6 @@ Details worth knowing:
 
 - Remote scanner arguments use Base64-encoded JSON, so neither POSIX nor Windows shells interpret their contents.
 - Non-interactive ssh runs with `BatchMode=yes`, so a misconfigured host fails fast instead of hanging the interface on a password prompt.
-- Interactive resume drops `BatchMode`, so ssh can still ask for a key passphrase.
 - Error messages show the host label only, never the key path from your hosts file.
 
 ---
@@ -330,10 +261,9 @@ Details worth knowing:
 
 Both tools write conversations as JSONL under your home directory. `context-find` reads those files directly and never modifies them.
 
-- **Terminal search needs no daemon.** The optional dashboard daemon caches usage metrics and tracks changed files independently of terminal search.
 - **Every store on the machine is searched.** Setting `CLAUDE_CONFIG_DIR` for some shells splits your history in two; `context-find` reads both it and `~/.claude`. On the machine this was built on, that was the difference between 64 and 68 results for the same query.
 - **Subagent sidechains are skipped**, since they have no session of their own to resume.
-- **Injected preambles never become a summary.** Hook output, system reminders, IDE notices, slash-command wrappers and Codex's AGENTS.md block are not what you typed, so the row shows the first thing you actually said. Press `t` in the reader to see the rest.
+- **Injected preambles never become a summary.** Hook output, system reminders, IDE notices, slash-command wrappers and Codex's AGENTS.md block are not what you typed, so the row shows the first thing you actually said.
 - **Sorted by last activity**, not by when the session started.
 - **Progressive results.** Local rows draw in about 0.27 s even when a configured host is powered off and will take ten seconds to time out.
 
@@ -363,8 +293,6 @@ Use `context-find --debug --list-machines` to print application mode, search cou
 
 **A conversation is missing.** Check `--list-machines` first; the counts tell you whether the store is even visible. Remember the search matches raw transcript text, so a phrase you only *remember* saying may have been phrased differently.
 
-**The banner is missing.** It hides itself below 24 rows or 38 columns, to spend those rows on results.
-
 **Boxes render as garbage.** The console is not UTF-8. The tool falls back to ASCII automatically when it detects that; if detection fails, the encoding is lying about itself.
 
 ---
@@ -390,9 +318,11 @@ context-find/
     store.ts      local scan and render, kept in step with store.py
     remote.ts     ssh transport, host specs, ships store.py to the far side
     search.ts     progressive local-then-remote results
-    rows.ts       row formatting and scroll maths, kept out of the JSX
-    ui.tsx        Ink components
-    cli.tsx       arguments, list mode, machines table, resume dispatch
+    web.ts        dashboard server and API
+    agents.ts     dashboard agents, through the installed tools
+    monitor.ts    collector: live sessions, usage and quotas
+    dashboard/    the dashboard page
+    cli.ts        arguments, the service, machines table, onboarding
   ts/test/        typescript tests, including the cross-language golden suite
 ```
 

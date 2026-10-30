@@ -1,5 +1,7 @@
 # feat: `--json`, `show`, `web` (agent-read + browser view)
 
+> 2026-10-28: the terminal list, `--json`, `--list`, `show`, `web`, `--host`, `--local` and the Ink UI were removed; `cfind` now only runs the dashboard service. Cases below about them are history. Current CLI cases: `feat_live_dashboard_test.md` E46 to E48.
+
 v1 of the hermes/agent read path plus a read-only browser view. Resume/terminal
 interaction is deferred to v2.
 

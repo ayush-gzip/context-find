@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -404,42 +404,3 @@ export function quoteForPosixShell(value: string): string {
   return "'" + value.split("'").join(`'"'"'`) + "'";
 }
 
-function powershellQuote(value: string): string {
-  return "'" + value.split("'").join("''") + "'";
-}
-
-export function buildResumeCommand(
-  spec: string,
-  cwd: string,
-  sessionId: string,
-  argv: string[],
-): string {
-  if (/#\s+context-find:os=windows(?:\s|$)/.test(spec)) {
-    const script = [
-      `Set-Location -LiteralPath ${powershellQuote(cwd)}`,
-      `& ${[...argv, sessionId].map(powershellQuote).join(" ")}`,
-    ].join("\n");
-    return `powershell.exe -NoProfile -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
-  }
-  const inner = `cd ${quoteForPosixShell(cwd)} && ${argv.join(" ")} ${quoteForPosixShell(sessionId)}`;
-
-  return `$SHELL -lc ${quoteForPosixShell(inner)}`;
-}
-
-export function resumeRemote(
-  spec: string,
-  cwd: string,
-  sessionId: string,
-  argv: string[],
-): number {
-  const remote = buildResumeCommand(spec, cwd, sessionId, argv);
-  const [command, ...rest] = buildSshArgv(spec, remote, {
-    batch: false,
-    tty: true,
-  });
-  debug(`${hostDisplayName(spec)}: remote resume started`);
-  const done = spawnSync(command!, rest, { stdio: "inherit" });
-  const status = done.status ?? 1;
-  debug(`${hostDisplayName(spec)}: resume exited ${status}`);
-  return status;
-}

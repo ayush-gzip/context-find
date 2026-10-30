@@ -11,9 +11,11 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  capturePane,
   codexHolder,
   procStart,
   queueCodex,
+  sendKey,
   sendToPane,
   takeOver,
 } from "../src/live.ts";
@@ -26,8 +28,9 @@ writeFileSync(
   `#!/bin/sh
 echo "$@" >> "$FAKE_TMUX_LOG"
 case "$1" in
-  display-message) echo "$FAKE_PANE_PID" ;;
+  display-message) case "$*" in *window_panes*) echo "3 1 1" ;; *) echo "$FAKE_PANE_PID" ;; esac ;;
   load-buffer) cat >> "$FAKE_TMUX_LOG"; echo >> "$FAKE_TMUX_LOG" ;;
+  capture-pane) printf ' Select model\n \\033]52;c;eA==\\007> 1. Opus\n   2. Sonnet\n\n' ;;
 esac
 `,
 );
@@ -102,6 +105,42 @@ test("a menu that opens during the paste stops the Enter", async () => {
   );
   assert.match(calls(), /paste-buffer/);
   assert.doesNotMatch(calls(), /send-keys/);
+});
+
+test("the menu screen and its keys work while the session waits", () => {
+  process.env["FAKE_PANE_PID"] = String(process.ppid);
+  writeFileSync(log, "");
+  const waiting = record({ status: "waiting" });
+  assert.deepEqual(capturePane(waiting), {
+    screen: "Select model\n ]52;c;eA==> 1. Opus\n   2. Sonnet",
+    split: true,
+    zoomed: true,
+  });
+  assert.match(calls(), /capture-pane -p -t %7\n/);
+  sendKey(waiting, "Down");
+  sendKey(waiting, "2");
+  sendKey(waiting, "s");
+  assert.deepEqual(calls().match(/send-keys .*/g), [
+    "send-keys -t %7 Down",
+    "send-keys -t %7 2",
+    "send-keys -t %7 s",
+  ]);
+  for (const key of ["C-c", "S", "ab", "0", "Enter Enter", "rm -rf ~"])
+    assert.throws(() => sendKey(waiting, key), /Unknown key/);
+  for (const [over, error] of [
+    [{ procStart: "Mon Jan 1 00:00:00 2001" }, /Could not confirm/],
+    [{ tmux: "" }, /not in tmux/],
+  ] as const) {
+    writeFileSync(log, "");
+    assert.throws(() => sendKey(record(over), "Enter"), error);
+    assert.throws(() => capturePane(record(over)), error);
+    assert.equal(calls(), "");
+  }
+  process.env["FAKE_PANE_PID"] = "999999";
+  writeFileSync(log, "");
+  assert.throws(() => sendKey(waiting, "Enter"), /no longer runs/);
+  assert.throws(() => capturePane(waiting), /no longer runs/);
+  assert.doesNotMatch(calls(), /capture-pane|send-keys/);
 });
 
 test("take over stops only a verified process outside tmux", async () => {

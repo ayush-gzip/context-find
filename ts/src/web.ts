@@ -38,16 +38,34 @@ import {
 } from "./store.ts";
 import { Search } from "./search.ts";
 import { join } from "node:path";
-import { Monitor, dashboardProfiles, monitorDir } from "./monitor.ts";
+import {
+  Monitor,
+  dashboardProfiles,
+  monitorDir,
+  type LiveRecord,
+} from "./monitor.ts";
 import { AgentWorkspace } from "./agents.ts";
-import { readConversation } from "./conversation.ts";
-import { codexHolder, queueCodex, sendToPane, takeOver } from "./live.ts";
+import { ChatFeeds } from "./chatfeed.ts";
+import { Deltas } from "./delta.ts";
+import {
+  capturePane,
+  codexHolder,
+  procStart,
+  queueCodex,
+  sendKey,
+  stopPane,
+  sendToPane,
+  takeOver,
+  zoomPane,
+} from "./live.ts";
 import { Devices, tailscaleHost } from "./devices.ts";
 import {
   MAX_UPLOAD,
+  pruneUploads,
   saveUpload,
   uploadIds,
   uploadPath,
+  uploadStats,
   uploadType,
   withPaths,
 } from "./uploads.ts";
@@ -134,6 +152,20 @@ export function createWebServer(
   const devices = new Devices();
   // A phone may retry a send after a dropped connection; one clientId runs once.
   const sent = new Map<string, { at: number; value?: unknown }>();
+  // Agents moved to tmux, until Claude records the session itself. It does that
+  // only after a folder trust question, which the terminal view can answer.
+  const started = new Map<string, LiveRecord>();
+  const terminalOf = (profile: string, sid: string) => {
+    const key = `${profile}|${sid}`,
+      real = monitor.live(profile, sid);
+    if (real) started.delete(key);
+    const r = real ?? started.get(key);
+    if (r && !real && procStart(r.pid) !== r.procStart) {
+      started.delete(key);
+      return undefined;
+    }
+    return r;
+  };
   const readJson = async (req: IncomingMessage, max: number) => {
     let body = "";
     for await (const chunk of req) {
@@ -149,22 +181,59 @@ export function createWebServer(
       monitor.start();
     }
   };
-  const peers = new Set<ServerResponse>();
-  const broadcast = (event: string, value: unknown) => {
-    const frame = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
-    for (const peer of peers) {
-      if (peer.writableLength > 2 * 1024 * 1024) {
-        peer.end();
-        peers.delete(peer);
-      } else peer.write(frame);
-    }
+  // Streams that asked for deltas (?delta=1) get the full snapshot once, then only
+  // what changed. Older apps keep getting full snapshots.
+  const peers = new Set<ServerResponse>(),
+    deltaPeers = new Set<ServerResponse>(),
+    chatPeers = new Set<ServerResponse>();
+  const write = (peer: ServerResponse, frame: string) => {
+    // A peer that cannot keep up is closed; it reconnects and starts from a snapshot.
+    if (peer.writableLength > 2 * 1024 * 1024) {
+      peer.end();
+      peers.delete(peer);
+      deltaPeers.delete(peer);
+    } else peer.write(frame);
   };
-  monitor.subscribe(() => broadcast("metrics", monitor.snapshot()));
-  workspace.subscribe(() => broadcast("workspace", workspace.snapshot()));
+  const sse = (event: string, value: unknown) =>
+    `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
+  const streams = {
+    metrics: { deltas: new Deltas(), read: () => monitor.snapshot() },
+    workspace: { deltas: new Deltas(), read: () => workspace.snapshot() },
+  };
+  /** Sends what changed to every stream; returns the snapshot it compared. */
+  const flush = (name: keyof typeof streams) => {
+    const s = streams[name],
+      snap = s.read(),
+      delta = s.deltas.next(snap);
+    if (delta) {
+      const frame = sse(name + "-delta", delta);
+      for (const peer of deltaPeers) write(peer, frame);
+    }
+    if (peers.size) {
+      const frame = sse(name, snap);
+      for (const peer of peers) write(peer, frame);
+    }
+    return snap;
+  };
+  monitor.subscribe(() => flush("metrics"));
+  // Agents change on every streamed token; one frame per 16 ms is enough.
+  let workspaceQueued: ReturnType<typeof setTimeout> | undefined;
+  workspace.subscribe(() => {
+    workspaceQueued ??= setTimeout(() => {
+      workspaceQueued = undefined;
+      flush("workspace");
+    }, 16);
+  });
+  const chats = new ChatFeeds();
   const heartbeat = setInterval(() => {
-    for (const peer of peers) peer.write(": heartbeat\n\n");
+    for (const peer of [...peers, ...deltaPeers, ...chatPeers])
+      peer.write(": heartbeat\n\n");
   }, 15000);
   heartbeat.unref();
+  // Old attached images go even when nothing new is attached.
+  pruneUploads();
+  const prune = setInterval(() => pruneUploads(), 24 * 3600 * 1000);
+  prune.unref();
   const localRoots = [...profiles.map((p) => p.path)].map((r) => resolve(r));
   /** Canonical transcript path, or the refusal for a path outside the stores. */
   const containedTranscript = (path: string): string | [number, string] => {
@@ -212,7 +281,8 @@ export function createWebServer(
       if (
         url.pathname === "/dashboard.css" ||
         url.pathname === "/dashboard.js" ||
-        url.pathname === "/markdown.js"
+        url.pathname === "/markdown.js" ||
+        url.pathname === "/delta.js"
       ) {
         res.writeHead(200, {
           "content-type": url.pathname.endsWith(".css")
@@ -311,14 +381,49 @@ export function createWebServer(
               connection: "keep-alive",
               "x-accel-buffering": "no",
             });
+            const deltas = url.searchParams.get("delta") === "1";
+            // Flushing first makes this snapshot the base of the next delta.
             res.write(
-              `event: metrics\ndata: ${JSON.stringify(monitor.snapshot())}\n\n`,
+              sse("metrics", deltas ? flush("metrics") : monitor.snapshot()),
             );
             res.write(
-              `event: workspace\ndata: ${JSON.stringify(workspace.snapshot())}\n\n`,
+              sse(
+                "workspace",
+                deltas ? flush("workspace") : workspace.snapshot(),
+              ),
             );
-            peers.add(res);
-            req.on("close", () => peers.delete(res));
+            const set = deltas ? deltaPeers : peers;
+            set.add(res);
+            req.on("close", () => set.delete(res));
+            return;
+          }
+          if (url.pathname === "/api/chat-events") {
+            const target = containedTranscript(
+              url.searchParams.get("path") ?? "",
+            );
+            if (Array.isArray(target)) {
+              json(res, target[0], { error: target[1] });
+              return;
+            }
+            res.writeHead(200, {
+              "content-type": "text/event-stream",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+            try {
+              const stop = chats.subscribe(target, (event, view) => {
+                if (res.writableEnded) return;
+                if (res.writableLength > 2 * 1024 * 1024) res.end();
+                else res.write(sse(event, view));
+              });
+              chatPeers.add(res);
+              req.on("close", () => {
+                stop();
+                chatPeers.delete(res);
+              });
+            } catch (e) {
+              res.end(sse("error", { error: (e as Error).message }));
+            }
             return;
           }
           if (url.pathname === "/api/metrics") {
@@ -329,6 +434,39 @@ export function createWebServer(
           }
           if (url.pathname === "/api/workspace") {
             json(res, 200, workspace.snapshot());
+            return;
+          }
+          if (url.pathname === "/api/commands") {
+            startMonitor();
+            const profile = url.searchParams.get("profile") ?? "",
+              cwd = url.searchParams.get("cwd") ?? "",
+              seen = (x: { profile: string; cwd: string }) =>
+                x.profile === profile && x.cwd === cwd;
+            // Claude starts in this folder to list its commands, so only
+            // folders where this profile already ran.
+            if (
+              !workspace.snapshot().agents.some(seen) &&
+              !monitor.snapshot().sessions.some(seen)
+            ) {
+              json(res, 403, { error: "Unknown folder" });
+              return;
+            }
+            json(res, 200, {
+              commands: await workspace.commands(profile, cwd),
+            });
+            return;
+          }
+          if (url.pathname === "/api/live-screen") {
+            startMonitor();
+            const live = terminalOf(
+              url.searchParams.get("profile") ?? "",
+              url.searchParams.get("sid") ?? "",
+            );
+            if (!live) {
+              json(res, 404, { error: "This session is not open in a terminal" });
+              return;
+            }
+            json(res, 200, capturePane(live));
             return;
           }
           if (url.pathname === "/api/accounts") {
@@ -373,6 +511,27 @@ export function createWebServer(
               "cache-control": "private, max-age=86400",
             });
             createReadStream(path).pipe(res);
+            return;
+          }
+          if (url.pathname === "/api/uploads") {
+            if (req.method === "POST") {
+              const data = await readJson(req, 1024);
+              if (data.action !== "clear") {
+                json(res, 400, { error: "Unknown action" });
+                return;
+              }
+              // Messages still waiting to be sent keep their images.
+              const keep = new Set(
+                workspace
+                  .snapshot()
+                  .agents.flatMap((a) =>
+                    a.queue.flatMap((q) => q.images ?? []),
+                  ),
+              );
+              json(res, 200, { removed: pruneUploads(true, keep) });
+              return;
+            }
+            json(res, 200, uploadStats());
             return;
           }
           if (url.pathname === "/api/agent" || url.pathname === "/api/login") {
@@ -424,11 +583,24 @@ export function createWebServer(
               json(res, 200, value);
             };
             const images = uploadIds(data.images);
+            if (data.action === "attach") {
+              const session = monitor.snapshot().sessions.find(
+                s => s.id === data.sid && s.profile === data.profile && s.source === "codex" && !s.parent,
+              );
+              if (!session) throw new Error("Unknown local Codex session");
+              if (codexHolder(session.path) === "other")
+                throw new Error("This Codex session uses a separate server. Open it with the shared Codex server to connect here.");
+              ok(await workspace.attach(session.profile, session.cwd, session.id,
+                session.path, session.title, session.updatedAt, session.startedAt));
+              return;
+            }
             const said = (v: unknown) =>
               typeof v === "string" && (!!v.trim() || images.length > 0);
             if (data.action === "create") {
               if (!said(data.prompt) || typeof data.cwd !== "string")
                 throw new Error("Project folder and prompt required");
+              if (data.prompt.trim().startsWith("!"))
+                throw new Error("Send a message first, then use ! to run a command");
               // An external live process cannot be safely attached by resuming it a second time.
               const session = data.sid
                 ? monitor
@@ -454,6 +626,8 @@ export function createWebServer(
                 throw new Error(
                   "Open in a Codex window that does not use the background helper. Reply there.",
                 );
+              if (data.sid && terminalOf(String(data.profile), String(data.sid)))
+                throw new Error("This session is open in a terminal");
               if (
                 data.sid &&
                 !holder &&
@@ -474,15 +648,26 @@ export function createWebServer(
               );
               return;
             }
-            if (data.action === "live-send" || data.action === "takeover") {
-              const live = monitor.live(String(data.profile), String(data.sid));
+            if (
+              data.action === "live-send" ||
+              data.action === "live-key" ||
+              data.action === "live-zoom" ||
+              data.action === "live-stop" ||
+              data.action === "takeover"
+            ) {
+              const live = terminalOf(String(data.profile), String(data.sid));
               if (!live)
                 throw new Error("This session is not open in a terminal");
               if (data.action === "takeover") await takeOver(live);
+              else if (data.action === "live-key")
+                sendKey(live, String(data.key));
+              else if (data.action === "live-zoom")
+                zoomPane(live, data.on === true);
+              else if (data.action === "live-stop") await stopPane(live);
               else if (!said(data.prompt)) throw new Error("Prompt required");
               else
                 await sendToPane(live, withPaths(data.prompt, images), () =>
-                  monitor.live(String(data.profile), String(data.sid)),
+                  terminalOf(String(data.profile), String(data.sid)),
                 );
               ok({ ok: true });
               return;
@@ -497,6 +682,29 @@ export function createWebServer(
             if (data.action === "cancel") {
               await workspace.cancel(data.id);
               ok({ ok: true });
+              return;
+            }
+            if (data.action === "terminal") {
+              const t = await workspace.openInTerminal(data.id);
+              started.set(`${t.profile}|${t.sid}`, {
+                profile: t.profile,
+                sessionId: t.sid,
+                pid: t.pid,
+                procStart: procStart(t.pid),
+                tmux: t.pane,
+                // Starting, or asking whether to trust the folder.
+                status: "waiting",
+                updatedAt: Date.now(),
+              });
+              ok({ profile: t.profile, sid: t.sid });
+              return;
+            }
+            if (data.action === "mode") {
+              ok(workspace.setMode(data.id, String(data.mode)));
+              return;
+            }
+            if (data.action === "send-now") {
+              ok(await workspace.sendNow(data.id));
               return;
             }
             if (data.action === "unqueue") {
@@ -587,7 +795,7 @@ export function createWebServer(
               json(res, target[0], { error: target[1] });
               return;
             }
-            json(res, 200, readConversation(target));
+            json(res, 200, chats.view(target));
             return;
           }
           if (url.pathname === "/api/session") {
@@ -639,6 +847,7 @@ export function createWebServer(
 
   server.on("close", () => {
     clearInterval(heartbeat);
+    clearInterval(prune);
     monitor.stop();
     workspace.close();
   });

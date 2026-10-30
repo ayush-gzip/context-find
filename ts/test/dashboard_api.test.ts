@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appendFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -103,6 +107,40 @@ test("dashboard APIs authenticate, reject foreign origins, and stream a fresh sn
     assert.equal((await conversation(join(home, "outside.jsonl"))).status, 403);
     assert.equal((await conversation(join(root, "escape.jsonl"))).status, 403);
     assert.equal((await conversation(join(root, "missing.jsonl"))).status, 404);
+    // An open chat streams its messages, then each new one, over its own stream.
+    const chatEvents = (path: string, t = token) =>
+      fetch(
+        base + "/api/chat-events?path=" + encodeURIComponent(path) + "&t=" + t,
+      );
+    assert.equal(
+      (await chatEvents(join(root, "chat.jsonl"), "wrong")).status,
+      403,
+    );
+    assert.equal((await chatEvents(join(home, "outside.jsonl"))).status, 403);
+    assert.equal((await chatEvents(join(root, "escape.jsonl"))).status, 403);
+    const live = await chatEvents(join(root, "chat.jsonl"));
+    assert.equal(live.headers.get("content-type"), "text/event-stream");
+    const frames = live.body!.getReader(),
+      next = async () => new TextDecoder().decode((await frames.read()).value);
+    assert.match(await next(), /event: chat\ndata: .*<b>hi<\/b>/);
+    appendFileSync(
+      join(root, "chat.jsonl"),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        message: { content: "more" },
+      }) + "\n",
+    );
+    assert.match(await next(), /event: chat-delta\ndata: .*"more"/);
+    await frames.cancel();
+    const deltas = (
+      await fetch(base + "/api/events?delta=1&t=" + token)
+    ).body!.getReader();
+    let first = "";
+    while (!/event: workspace/.test(first))
+      first += new TextDecoder().decode((await deltas.read()).value);
+    assert.match(first, /^event: metrics\n/);
+    await deltas.cancel();
     const script = await fetch(base + "/markdown.js");
     assert.equal(script.headers.get("content-type"), "text/javascript");
     const bad = await fetch(base + "/api/agent?t=" + token, {
@@ -182,6 +220,28 @@ test("image uploads accept real images only and serve them back safely", async (
         (await fetch(`${base}/api/upload?t=${token}&id=${bad}`)).status,
         status,
       );
+    // Images go after 7 days, and Settings can clear them all.
+    const dir = join(home, "metrics", "uploads"),
+      old = "a".repeat(32) + ".png";
+    writeFileSync(join(dir, old), png);
+    const week = (Date.now() - 8 * 86400000) / 1000;
+    utimesSync(join(dir, old), week, week);
+    assert.equal((await up(png)).status, 200);
+    assert.ok(!existsSync(join(dir, old)), "an old image is removed");
+    const stats = await (await fetch(`${base}/api/uploads?t=${token}`)).json();
+    assert.deepEqual([stats.count, stats.keepDays], [3, 7]);
+    assert.ok(stats.bytes > 0);
+    const clear = (body: unknown) =>
+      fetch(`${base}/api/uploads?t=${token}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await clear({ action: "other" })).status, 400);
+    assert.deepEqual(await (await clear({ action: "clear" })).json(), {
+      removed: 3,
+    });
+    assert.deepEqual(readdirSync(dir), []);
   } finally {
     server.close();
     for (const [k, v] of Object.entries(prior))

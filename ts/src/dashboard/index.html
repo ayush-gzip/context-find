@@ -12,16 +12,22 @@
     <link rel="stylesheet" href="/dashboard.css" />
   </head>
   <body>
+    <button
+      class="icon-button sidebar-toggle"
+      id="sidebar-toggle"
+      aria-label="Hide or show the sidebar"
+      title="Sidebar (⌘B)"
+    ></button>
     <aside class="sidebar">
-      <a class="brand" href="#overview" aria-label="cfind home"
-        ><span class="brand-symbol">c</span><span>cfind</span></a
-      >
-      <div class="workspace-label">
-        <span class="avatar">⌘</span
-        ><span>My workspace<small>On this Mac</small></span
-        ><span class="online-dot"></span>
+      <div class="sidebar-top"></div>
+      <div class="sidebar-actions">
+        <button class="nav-item" id="new-agent">
+          <span></span> New agent <kbd>⌘N</kbd>
+        </button>
+        <button class="nav-item" data-search>
+          <span></span> Search <kbd>⌘K</kbd>
+        </button>
       </div>
-      <div class="nav-label">Workspace</div>
       <nav id="navigation">
         <button data-page="overview" class="nav-item active">
           <span>◫</span> Overview
@@ -31,9 +37,6 @@
         </button>
         <button data-page="sessions" class="nav-item">
           <span>≡</span> Sessions
-        </button>
-        <button data-page="usage" class="nav-item">
-          <span>▥</span> Usage & analytics
         </button>
         <button data-page="machines" class="nav-item">
           <span>▣</span> Machines
@@ -51,7 +54,6 @@
         <button data-page="settings" class="nav-item">
           <span>⚙</span> Connections <span class="nav-arrow">↗</span>
         </button>
-        <div class="sidebar-foot">Stored on this Mac</div>
       </div>
     </aside>
     <div class="shell">
@@ -67,10 +69,7 @@
             title="Switch appearance"
           ></button
           ><span id="clock"></span
-          ><span class="live-badge" id="live-badge"><i></i> Connecting</span
-          ><button class="button light" id="new-agent">
-            <span>＋</span> New agent
-          </button>
+          ><span class="live-badge" id="live-badge"><i></i> Connecting</span>
         </div>
       </header>
       <main id="main" tabindex="-1">
@@ -82,7 +81,7 @@
       </main>
       <footer class="statusbar">
         <span
-          ><i class="online-dot"></i> LOCAL ONLY
+          ><i class="online-dot"></i> Local only
           <span class="status-separator">/</span>
           <span id="footer-sources">Discovering sources</span></span
         ><span id="footer-update">Waiting for collector</span>
@@ -97,7 +96,7 @@
     <dialog id="new-dialog">
       <form id="new-form">
         <div class="dialog-top">
-          <span class="eyebrow">START SOMETHING</span
+          <span class="eyebrow">New agent</span
           ><button
             class="icon-button"
             type="button"
@@ -109,8 +108,8 @@
         </div>
         <h2>A new agent, ready to work.</h2>
         <p class="muted">
-          Choose a profile and a project. Tool requests appear in the
-          conversation.
+          Choose a profile and a project. New Claude agents use auto mode.
+          Questions and approval requests appear in the conversation.
         </p>
         <label
           >Agent profile<select name="profile" id="new-profile"></select></label
@@ -164,11 +163,51 @@
     <dialog id="image-dialog" class="image-viewer" aria-label="Image">
       <img alt="Attached image" />
     </dialog>
+    <dialog id="palette" class="palette" aria-label="Command menu">
+      <input
+        id="palette-q"
+        placeholder="Type a command or search…"
+        aria-label="Command or search"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <div id="palette-list" role="listbox"></div>
+    </dialog>
+    <dialog id="keys-dialog" class="keys" aria-label="Keyboard shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <dl>
+        <dt><kbd>⌘K</kbd></dt>
+        <dd>Command menu</dd>
+        <dt><kbd>C</kbd></dt>
+        <dd>New agent</dd>
+        <dt><kbd>G</kbd> <kbd>O</kbd></dt>
+        <dd>Overview</dd>
+        <dt><kbd>G</kbd> <kbd>A</kbd></dt>
+        <dd>Agents</dd>
+        <dt><kbd>G</kbd> <kbd>S</kbd></dt>
+        <dd>Sessions</dd>
+        <dt><kbd>G</kbd> <kbd>U</kbd></dt>
+        <dd>Usage</dd>
+        <dt><kbd>G</kbd> <kbd>M</kbd></dt>
+        <dd>Machines</dd>
+        <dt><kbd>/</kbd></dt>
+        <dd>Search sessions</dd>
+        <dt><kbd>⌘1</kbd> to <kbd>⌘6</kbd></dt>
+        <dd>Go to a section</dd>
+        <dt><kbd>⌘B</kbd></dt>
+        <dd>Hide or show the sidebar</dd>
+        <dt class="mac-only"><kbd>⌃⌘F</kbd></dt>
+        <dd class="mac-only">Full screen</dd>
+        <dt><kbd>Esc</kbd></dt>
+        <dd>Close the chat</dd>
+      </dl>
+    </dialog>
     <div id="toast" class="toast" role="status" hidden></div>
     <script>
       window.CFIND_TOKEN = "__TOKEN__";
     </script>
     <script src="/markdown.js" defer></script>
+    <script src="/delta.js" defer></script>
     <script src="/dashboard.js" defer></script>
   </body>
 </html>
