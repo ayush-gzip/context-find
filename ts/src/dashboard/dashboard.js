@@ -332,12 +332,22 @@ function chart() {
 const recentFirst = (a, b) =>
   (b.updatedAt || b.startedAt || 0) - (a.updatedAt || a.startedAt || 0) ||
   `${a.profile || ""}|${a.id}`.localeCompare(`${b.profile || ""}|${b.id}`);
+/** The board's order: when you or the agent last wrote. Tool runs and other
+ *  file writes move `updatedAt` but not this. */
+const lastTalk = (a) => a.lastActive || a.updatedAt || a.startedAt || 0;
+const talkFirst = (a, b) => lastTalk(b) - lastTalk(a) || recentFirst(a, b);
 /** A turn that ended on a question (`cfind ask`, or the reply asks) shows as its own state. */
 const shownState = (x) => (x.ask && x.state === "idle" ? "asking" : x.state);
 function allAgents() {
   const owned = S.workspace.agents.map((a) => ({
       ...a,
       state: shownState(a),
+      lastActive: Math.max(
+        0,
+        ...a.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => m.time || 0),
+      ),
       owned: true,
       children: [...a.children].sort(recentFirst),
     })),
@@ -376,7 +386,7 @@ function allAgents() {
     }));
   return [...owned, ...observed]
     .filter((a) => inScope(a.profile))
-    .sort(recentFirst);
+    .sort(talkFirst);
 }
 function kids(children) {
   const live = children.filter((c) =>
