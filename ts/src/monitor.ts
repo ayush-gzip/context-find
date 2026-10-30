@@ -59,6 +59,9 @@ export interface ObservedSession {
   parent: string | null;
   updatedAt: number;
   startedAt: number;
+  /** When you or the agent last wrote a message. Tool runs and other file
+   *  writes move `updatedAt` but not this; the Agents board sorts by it. */
+  lastActive?: number;
   state: string;
   /** A live process (another window) owns this session. */
   open?: boolean;
@@ -315,11 +318,25 @@ function consume(f: FileState, row: any, mtime: number) {
       t &&
       !t.startsWith("# AGENTS.md") &&
       !t.startsWith("<") &&
-      !t.startsWith("[Request interrupted") &&
-      s.title === "Untitled session"
-    )
-      s.title = t.slice(0, 220);
+      !t.startsWith("[Request interrupted")
+    ) {
+      if (!row.isMeta && !row.isSidechain)
+        s.lastActive = Math.max(s.lastActive ?? 0, time);
+      if (s.title === "Untitled session") s.title = t.slice(0, 220);
+    }
   }
+  const said = (content: any, type: string) =>
+    Array.isArray(content) &&
+    content.some((c: any) => c?.type === type && c.text?.trim());
+  if (
+    (row.type === "assistant" &&
+      !row.isSidechain &&
+      said(row.message?.content, "text")) ||
+    (row.type === "response_item" &&
+      row.payload?.role === "assistant" &&
+      said(row.payload.content, "output_text"))
+  )
+    s.lastActive = Math.max(s.lastActive ?? 0, time);
   if (row.type === "event_msg") {
     const p = row.payload;
     if (p?.type === "task_started") s.state = "running";
@@ -417,7 +434,7 @@ export class Monitor {
       const saved = JSON.parse(
         readFileSync(join(this.dataDir, "metrics.json"), "utf8"),
       );
-      if (saved.version === 4) this.cache = saved.files;
+      if (saved.version === 5) this.cache = saved.files;
     } catch {}
   }
   subscribe(fn: () => void) {
@@ -594,7 +611,7 @@ export class Monitor {
     const path = join(this.dataDir, "metrics.json");
     writeFileSync(
       path + ".tmp",
-      JSON.stringify({ version: 4, files: this.cache }),
+      JSON.stringify({ version: 5, files: this.cache }),
       { mode: 0o600 },
     );
     renameSync(path + ".tmp", path);

@@ -112,7 +112,59 @@ test("version 2 metrics are rebuilt from transcripts to correct synthetic model 
     await restarted.refresh();
     assert.equal(restarted.snapshot().sessions[0]!.model, "opus");
     assert.equal(restarted.snapshot().profiles[0]!.tokens.output, 3);
-    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 4);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 5);
+  } finally {
+    rmSync(f.home, { recursive: true, force: true });
+  }
+});
+test("lastActive is the last message you or the agent wrote, not the last file write", async () => {
+  const f = fixture();
+  try {
+    const at = (t: string) => Date.parse(`2026-10-27T${t}Z`),
+      row = (type: string, t: string, extra: object) => ({
+        type,
+        timestamp: `2026-10-27T${t}Z`,
+        sessionId: "s1",
+        cwd: "/project",
+        ...extra,
+      }),
+      lines = (rows: object[]) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+    writeFileSync(
+      join(f.roots[0]!.path, "talk.jsonl"),
+      lines([
+        row("user", "10:00:00", { message: { role: "user", content: "fix the bug" } }),
+        row("assistant", "10:01:00", { message: { id: "a1", content: [{ type: "text", text: "Done." }] } }),
+        row("user", "10:05:00", { message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } }),
+        row("user", "10:06:00", { isMeta: true, message: { role: "user", content: "Caveat: local command" } }),
+        row("assistant", "10:07:00", { message: { id: "a2", content: [{ type: "tool_use", name: "Bash", input: {} }] } }),
+        { type: "file-history-snapshot", timestamp: "2026-10-27T10:08:00Z" },
+      ]),
+    );
+    const said = (role: string, t: string, type: string, text: string) => ({
+      type: "response_item",
+      timestamp: `2026-10-27T${t}Z`,
+      payload: { type: "message", role, content: [{ type, text }] },
+    });
+    writeFileSync(
+      join(f.roots[2]!.path, "rollout.jsonl"),
+      lines([
+        { type: "session_meta", timestamp: "2026-10-27T09:00:00Z", payload: { id: "c1", cwd: "/project" } },
+        said("user", "09:00:01", "input_text", "<environment_context>cwd</environment_context>"),
+        said("user", "09:01:00", "input_text", "add tests"),
+        said("assistant", "09:02:00", "output_text", "Added."),
+        said("user", "09:03:00", "input_text", "# AGENTS.md instructions"),
+        { ...codex(10, 5), timestamp: "2026-10-27T09:09:00Z" },
+      ]),
+    );
+    const monitor = new Monitor(f.options);
+    await monitor.refresh();
+    const d = monitor.snapshot(),
+      c = d.sessions.find((s) => s.profile === "claude")!,
+      x = d.sessions.find((s) => s.profile === "codex")!;
+    assert.equal(c.lastActive, at("10:01:00"));
+    assert.ok(c.updatedAt >= at("10:08:00"));
+    assert.equal(x.lastActive, at("09:02:00"));
+    assert.ok(x.updatedAt >= at("09:09:00"));
   } finally {
     rmSync(f.home, { recursive: true, force: true });
   }
