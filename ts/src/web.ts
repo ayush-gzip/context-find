@@ -56,6 +56,7 @@ import {
   stopPane,
   sendToPane,
   takeOver,
+  zoomPane,
 } from "./live.ts";
 import { Devices, tailscaleHost } from "./devices.ts";
 import {
@@ -465,7 +466,7 @@ export function createWebServer(
               json(res, 404, { error: "This session is not open in a terminal" });
               return;
             }
-            json(res, 200, { screen: capturePane(live) });
+            json(res, 200, capturePane(live));
             return;
           }
           if (url.pathname === "/api/accounts") {
@@ -650,6 +651,7 @@ export function createWebServer(
             if (
               data.action === "live-send" ||
               data.action === "live-key" ||
+              data.action === "live-zoom" ||
               data.action === "live-stop" ||
               data.action === "takeover"
             ) {
@@ -659,6 +661,8 @@ export function createWebServer(
               if (data.action === "takeover") await takeOver(live);
               else if (data.action === "live-key")
                 sendKey(live, String(data.key));
+              else if (data.action === "live-zoom")
+                zoomPane(live, data.on === true);
               else if (data.action === "live-stop") await stopPane(live);
               else if (!said(data.prompt)) throw new Error("Prompt required");
               else

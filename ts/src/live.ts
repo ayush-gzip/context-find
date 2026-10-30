@@ -140,17 +140,75 @@ export async function sendToPane(
   run(tmux, ["send-keys", "-t", r.tmux, "Enter"]);
 }
 
-/** The pane's screen as plain text, for menus the transcript does not record. */
+/** The pane's screen as plain text, for menus the transcript does not record,
+ *  and whether its window has other panes and is zoomed on this one. */
 export function capturePane(r: LiveRecord) {
   if (!r.tmux) throw new Error("This session is not in tmux");
   sameProcess(r);
-  // No -e: tmux leaves out colours and other escape codes.
-  const screen = run(checkPane(r), ["capture-pane", "-p", "-t", r.tmux]);
-  return screen
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
-    .split("\n")
-    .slice(-40)
-    .join("\n");
+  const tmux = checkPane(r),
+    // No -e: tmux leaves out colours and other escape codes.
+    screen = run(tmux, ["capture-pane", "-p", "-t", r.tmux]),
+    [panes, zoomed, active] = run(tmux, [
+      "display-message",
+      "-p",
+      "-t",
+      r.tmux,
+      "#{window_panes} #{window_zoomed_flag} #{pane_active}",
+    ]).split(" ");
+  return {
+    screen: screen
+      .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+      .split("\n")
+      .slice(-40)
+      .join("\n"),
+    split: Number(panes) > 1,
+    zoomed: zoomed === "1" && active === "1",
+  };
+}
+
+// Panes this daemon zoomed: the pane that had the keyboard, and whether that
+// pane was zoomed.
+const zooms = new Map<string, { pane: string; zoomed: boolean }>();
+
+/** Zooms the pane to fill its tmux window, as prefix z does, so a short pane
+ *  shows a whole menu. Zooming makes it the window's active pane, so unzooming
+ *  gives the keyboard back to the pane that had it. */
+export function zoomPane(r: LiveRecord, on: boolean) {
+  if (!r.tmux) throw new Error("This session is not in tmux");
+  sameProcess(r);
+  const tmux = checkPane(r),
+    pane = r.tmux,
+    zoom = (p: string) => run(tmux, ["resize-pane", "-Z", "-t", p]),
+    [, flag, active = ""] =
+      run(tmux, [
+        "list-panes",
+        "-t",
+        pane,
+        "-F",
+        "#{pane_active} #{window_zoomed_flag} #{pane_id}",
+      ])
+        .split("\n")
+        .find((l) => l.startsWith("1 "))
+        ?.split(" ") ?? [],
+    zoomed = flag === "1",
+    mine = zoomed && active === pane;
+  if (on) {
+    if (mine) return;
+    // resize-pane -Z unzooms a window that is zoomed on any pane.
+    if (zoomed) zoom(active);
+    zoom(pane);
+    zooms.set(pane, { pane: active, zoomed });
+    return;
+  }
+  const before = zooms.get(pane);
+  zooms.delete(pane);
+  // Someone changed the window since; leave it as it is.
+  if (!mine) return;
+  zoom(pane);
+  if (!before || before.pane === pane) return;
+  // That pane may have closed since.
+  quiet(tmux, ["select-pane", "-t", before.pane]);
+  if (before.zoomed) quiet(tmux, ["resize-pane", "-Z", "-t", before.pane]);
 }
 
 // Enough to move through a menu and pick or close it. Letters are menu keys too,

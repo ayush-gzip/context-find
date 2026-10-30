@@ -28,7 +28,7 @@ writeFileSync(
   `#!/bin/sh
 echo "$@" >> "$FAKE_TMUX_LOG"
 case "$1" in
-  display-message) echo "$FAKE_PANE_PID" ;;
+  display-message) case "$*" in *window_panes*) echo "3 1 1" ;; *) echo "$FAKE_PANE_PID" ;; esac ;;
   load-buffer) cat >> "$FAKE_TMUX_LOG"; echo >> "$FAKE_TMUX_LOG" ;;
   capture-pane) printf ' Select model\n \\033]52;c;eA==\\007> 1. Opus\n   2. Sonnet\n\n' ;;
 esac
@@ -111,11 +111,12 @@ test("the menu screen and its keys work while the session waits", () => {
   process.env["FAKE_PANE_PID"] = String(process.ppid);
   writeFileSync(log, "");
   const waiting = record({ status: "waiting" });
-  assert.equal(
-    capturePane(waiting),
-    "Select model\n ]52;c;eA==> 1. Opus\n   2. Sonnet",
-  );
-  assert.match(calls(), /capture-pane -p -t %7\n$/);
+  assert.deepEqual(capturePane(waiting), {
+    screen: "Select model\n ]52;c;eA==> 1. Opus\n   2. Sonnet",
+    split: true,
+    zoomed: true,
+  });
+  assert.match(calls(), /capture-pane -p -t %7\n/);
   sendKey(waiting, "Down");
   sendKey(waiting, "2");
   sendKey(waiting, "s");

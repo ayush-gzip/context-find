@@ -3051,6 +3051,9 @@ html:has(.drawer.full:not([hidden])) {
   font-weight: 400;
   color: var(--muted);
 }
+.term-head .button {
+  height: 26px;
+}
 .term-screen {
   margin: 0;
   padding: 10px 14px;

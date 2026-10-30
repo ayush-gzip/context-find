@@ -1500,7 +1500,7 @@ function termHtml() {
     ["Tab", "Tab"],
     ["Escape", "Esc"],
   ];
-  return `<div class="term-card" tabindex="0" aria-label="Terminal view. Keys you press here go to the terminal."><div class="term-head"><span>Terminal</span><small id="term-status">Click here to use your keyboard</small><button type="button" class="icon-button" data-term aria-label="Hide terminal view">×</button></div><pre class="term-screen" id="term-screen"></pre><div class="term-keys">${keys.map(([k, label]) => `<button type="button" class="button" data-term-key="${k}">${label}</button>`).join("")}<button type="button" class="button light" data-term-key="Enter">Enter</button></div></div>`;
+  return `<div class="term-card" tabindex="0" aria-label="Terminal view. Keys you press here go to the terminal."><div class="term-head"><span>Terminal</span><small id="term-status">Click here to use your keyboard</small><button type="button" class="button" data-term-zoom aria-pressed="false" title="Fill its tmux window with this pane, as prefix z does" hidden>Zoom</button><button type="button" class="icon-button" data-term aria-label="Hide terminal view">×</button></div><pre class="term-screen" id="term-screen"></pre><div class="term-keys">${keys.map(([k, label]) => `<button type="button" class="button" data-term-key="${k}">${label}</button>`).join("")}<button type="button" class="button light" data-term-key="Enter">Enter</button></div></div>`;
 }
 /** Reads the pane every second while the card is on screen. Only the newest
  *  call goes on, so a key press does not start a second loop. */
@@ -1508,7 +1508,13 @@ async function pollTerm() {
   clearTimeout(S.termTimer);
   const run = (S.termRun = (S.termRun || 0) + 1),
     s = S.view?.kind === "session" ? S.view.s : null,
-    screen = $("#term-screen");
+    screen = $("#term-screen"),
+    z = S.termZoom;
+  // A zoom started here ends with the terminal view.
+  if (z && (!screen || z.profile !== s?.profile || z.sid !== s?.id)) {
+    S.termZoom = null;
+    api("agent", { action: "live-zoom", ...z, on: false }).catch(() => {});
+  }
   if (!s || !screen) return;
   try {
     const d = await api(
@@ -1516,6 +1522,11 @@ async function pollTerm() {
     );
     if (run !== S.termRun || !screen.isConnected) return;
     $("#term-status").textContent = "Click here to use your keyboard";
+    const zoom = $("[data-term-zoom]");
+    // A short pane shows a cut menu; only a split window can zoom.
+    zoom.hidden = !d.split;
+    zoom.textContent = d.zoomed ? "Unzoom" : "Zoom";
+    zoom.setAttribute("aria-pressed", String(!!d.zoomed));
     if (screen.textContent !== d.screen) {
       // Text, never HTML: the pane shows whatever the session printed.
       screen.textContent = d.screen;
@@ -1526,6 +1537,18 @@ async function pollTerm() {
     $("#term-status").textContent = error.message;
   }
   S.termTimer = setTimeout(pollTerm, document.hidden ? 5000 : 1000);
+}
+async function zoomTerm(on) {
+  const s = S.view?.s;
+  if (!s) return;
+  try {
+    await api("agent", { action: "live-zoom", profile: s.profile, sid: s.id, on });
+    S.termZoom = on ? { profile: s.profile, sid: s.id } : null;
+    // Claude redraws at the new size.
+    setTimeout(pollTerm, 300);
+  } catch (error) {
+    toast(error.message);
+  }
 }
 async function sendTermKey(key) {
   const s = S.view?.s;
@@ -1738,6 +1761,8 @@ document.addEventListener("click", async (e) => {
     if (b.dataset.page) navigate(b.dataset.page);
     if (b.dataset.slash) pickSlash(b.dataset.slash);
     if (b.dataset.termKey) sendTermKey(b.dataset.termKey);
+    if (b.hasAttribute("data-term-zoom"))
+      zoomTerm(b.getAttribute("aria-pressed") !== "true");
     if (b.hasAttribute("data-mode")) switchMode();
     if (b.hasAttribute("data-open-terminal")) await openTerminal();
     if (b.hasAttribute("data-term")) {
