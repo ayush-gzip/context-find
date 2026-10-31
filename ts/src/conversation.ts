@@ -369,11 +369,19 @@ class Parser {
         });
     } else if (kind === "assistant") {
       (Array.isArray(content) ? content : []).forEach((b: any, i: number) => {
-        if (b?.type === "text" && String(b.text ?? "").trim())
+        // With thinkingDisplay "updates", the terminal shows the few thinking
+        // blocks that carry text as the agent's own lines.
+        const said =
+          b?.type === "text"
+            ? b.text
+            : b?.type === "thinking" && entry["thinkingDisplay"] === "updates"
+              ? b.thinking
+              : "";
+        if (String(said ?? "").trim())
           this.push({
             id: `${entry["uuid"] ?? this.count}:${i}`,
             role: "assistant",
-            text: clean(String(b.text).trim()),
+            text: clean(String(said).trim()),
             time,
           });
         if (b?.type !== "tool_use") return;

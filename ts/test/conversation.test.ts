@@ -549,3 +549,30 @@ test("a cfind ask question shows in full as the agent's message, not a cut-off c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a thinking update shows as the agent's message, like in the terminal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-chat-")),
+    path = join(dir, "s.jsonl");
+  const think = (uuid: string, thinking: string, thinkingDisplay?: string) => ({
+    type: "assistant",
+    uuid,
+    thinkingDisplay,
+    message: { content: [{ type: "thinking", thinking, signature: "sig" }] },
+  });
+  try {
+    writeFileSync(
+      path,
+      jsonl([
+        think("a1", "", "updates"),
+        think("a2", "Confirmed: the data is still there, just renamed.", "updates"),
+        think("a3", "Raw reasoning the terminal never shows."),
+      ]),
+    );
+    assert.deepEqual(
+      readConversation(path).messages.map((m) => [m.role, m.text]),
+      [["assistant", "Confirmed: the data is still there, just renamed."]],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
