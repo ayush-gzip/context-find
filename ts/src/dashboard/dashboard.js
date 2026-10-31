@@ -1667,9 +1667,16 @@ async function sendFromComposer() {
         prompt,
         images,
       });
-      sent.note = "Sent to its terminal, not read yet";
-      // Ctrl+X Ctrl+S is Claude's; Codex has no such key.
-      sent.sendNow = s.source === "claude";
+      if (prompt.startsWith("/")) {
+        // A /command runs at once, and a panel such as /usage is never
+        // written to the transcript: show the pane instead of a bubble.
+        drop();
+        S.term = { key, state: s.state, show: true };
+      } else {
+        sent.note = "Sent to its terminal, not read yet";
+        // Ctrl+X Ctrl+S is Claude's; Codex has no such key.
+        sent.sendNow = s.source === "claude";
+      }
       renderChat();
     } else {
       const s = S.view.s,
