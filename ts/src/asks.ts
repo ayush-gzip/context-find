@@ -3,7 +3,7 @@
 // the last paragraph of its final reply can still show it.
 
 const MAX = 240;
-const clip = (text: string) => {
+export const clip = (text: string) => {
   const t = text
     .replace(/\*\*|__|`/g, "")
     .replace(/\s+/g, " ")
@@ -11,31 +11,30 @@ const clip = (text: string) => {
   return t.length > MAX ? t.slice(0, MAX - 1) + "…" : t;
 };
 
-/** The words after `cfind ask`: the quoted question, or the rest of the line. */
-function question(rest: string) {
+/** The words after `cfind ask`: the quoted question, or the rest of the line.
+ *  `full` keeps all of it as written, for the chat; the ask itself is clipped. */
+function question(rest: string, full = false) {
   // Inside a Codex exec script the command is a JS string, so its quotes are escaped.
   const r = rest.replace(/\\(["'])/g, "$1").trim();
-  const quoted = /^(["'])([\s\S]*?)\1/.exec(r);
-  return (
-    clip(quoted ? quoted[2]! : r.split(/[\n;&|"'`]/)[0]!) ||
-    "Waiting for your answer"
-  );
+  const quoted = /^(["'])([\s\S]*?)\1/.exec(r),
+    q = quoted ? quoted[2]! : r.split(/[\n;&|"'`]/)[0]!;
+  return (full ? q.trim() : clip(q)) || "Waiting for your answer";
 }
 
 /** The question when a shell command is the `cfind ask` call itself. Codex runs
  *  commands as `zsh -lc '…'`. A command that only mentions it does not count. */
-export function askCommand(command: string): string | undefined {
+export function askCommand(command: string, full = false): string | undefined {
   let c = command.trim();
   const shell = /^(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+(["'])([\s\S]*)\1$/.exec(c);
   if (shell) c = shell[2]!.trim();
   const m = /^cfind\s+ask\b([\s\S]*)$/.exec(c);
-  return m ? question(m[1]!) : undefined;
+  return m ? question(m[1]!, full) : undefined;
 }
 
 /** The same call in a Codex exec script: `tools.exec_command({cmd:"cfind ask \"…\""})`. */
-export function askScript(script: string): string | undefined {
+export function askScript(script: string, full = false): string | undefined {
   const m = /\bcmd["']?\s*:\s*["'`]\s*cfind\s+ask\b([^\n]*)/.exec(script);
-  return m ? question(m[1]!) : undefined;
+  return m ? question(m[1]!, full) : undefined;
 }
 
 const ASKING = [

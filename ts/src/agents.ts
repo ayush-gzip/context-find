@@ -17,7 +17,7 @@ import { CodexRPC } from "./codex.ts";
 import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 import { startInTmux } from "./live.ts";
-import { askCommand, askReply } from "./asks.ts";
+import { askCommand, askReply, clip as clipAsk } from "./asks.ts";
 import { recordSignal } from "./collector.ts";
 
 export interface Message {
@@ -28,6 +28,8 @@ export interface Message {
   tool?: { name: string; input: string; output?: string; error?: boolean };
   /** Upload ids of images sent with a user message. */
   images?: string[];
+  /** The agent's `cfind ask` question, shown in full in place of the command. */
+  question?: boolean;
 }
 export interface QueueItem {
   text: string;
@@ -125,6 +127,19 @@ function pushTool(
   const text =
     typeof input === "string" ? input : JSON.stringify(input ?? {}, null, 2);
   if (a.messages.some((m) => m.id === id)) return;
+  // The agent's `cfind ask` question shows in full, not as a cut-off command
+  // row. A `!` command the user typed is not the agent asking.
+  const command = typeof input === "string" ? input : (input as any)?.command,
+    asked =
+      (name === "Bash" || (name === "Shell" && !summary.startsWith("! "))) &&
+      typeof command === "string"
+        ? askCommand(command, true)
+        : undefined;
+  if (asked) {
+    push(a, "assistant", asked, id);
+    a.messages[a.messages.length - 1]!.question = true;
+    return;
+  }
   push(a, "tool", summary.split(/\s+/).join(" ").slice(0, 300), id);
   a.messages[a.messages.length - 1]!.tool = { name, input: clip(text) };
 }
@@ -135,6 +150,7 @@ function setAsk(a: Agent) {
   let ask: string | undefined, reply: string | undefined;
   for (const m of a.messages.slice(start)) {
     if (m.role === "assistant" && m.text.trim()) reply = m.text;
+    if (m.question) ask = clipAsk(m.text);
     if (m.role !== "tool" || !m.tool) continue;
     // Claude's input is JSON with a command; Codex's is the command itself.
     let command = m.tool.input;
