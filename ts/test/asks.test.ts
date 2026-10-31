@@ -13,6 +13,9 @@ test("cfind ask calls are found in commands and Codex exec scripts", () => {
   assert.equal(askCommand(`  cfind ask 'Which region?'`), "Which region?");
   assert.equal(askCommand(`/bin/zsh -lc 'cfind ask "Ship it?"'`), "Ship it?");
   assert.equal(askCommand(`cfind ask`), "Waiting for your answer");
+  const long = "Why? " + "Because. ".repeat(40);
+  assert.equal(askCommand(`cfind ask "${long}"`)!.length, 240, "the ask is clipped");
+  assert.equal(askCommand(`cfind ask "${long}"`, true), long.trim(), "the chat shows all of it");
   // Only the call itself counts, not a command that mentions it.
   assert.equal(askCommand(`grep -n "cfind ask" src/asks.ts`), undefined);
   assert.equal(askCommand(`echo hi && cfind ask "x"`), undefined);
@@ -189,6 +192,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     const a = await w.create("claude", dir, "first");
     await until(() => a.state === "idle" && a.messages.some((m) => m.text === "Ready to deploy."));
     assert.equal(a.ask, "Deploy now?");
+    // The question shows as the agent's own message, not a Bash row.
+    const q = a.messages.find((m) => m.id === "t1")!;
+    assert.deepEqual({ role: q.role, text: q.text, question: q.question, tool: q.tool }, { role: "assistant", text: "Deploy now?", question: true, tool: undefined });
     await w.send(a.id, "yes");
     await until(() => a.messages.some((m) => m.text === "Deployed.") && a.state === "idle");
     assert.equal(a.ask, undefined);

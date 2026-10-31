@@ -486,3 +486,93 @@ test("commands run in Claude Code's terminal show as one grey line", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a cfind ask question shows in full as the agent's message, not a cut-off command", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-chat-")),
+    path = join(dir, "s.jsonl"),
+    codexPath = join(dir, "rollout.jsonl"),
+    long = "Found no access entry on any of the three clusters. " + "Detail. ".repeat(40) + "Port the scripts now?";
+  const bash = (id: string, command: string) => ({
+    type: "assistant",
+    uuid: "a" + id,
+    timestamp: "2026-10-27T10:00:02Z",
+    message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+  });
+  const result = (id: string) => ({
+    type: "user",
+    uuid: "r" + id,
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: "cfind: marked" }] },
+  });
+  try {
+    writeFileSync(
+      path,
+      jsonl([
+        bash("t1", `grep -n "cfind ask" notes.md`),
+        result("t1"),
+        bash("t2", `cfind ask "${long}"`),
+        result("t2"),
+        {
+          type: "assistant",
+          uuid: "a3",
+          message: { content: [{ type: "text", text: "Waiting on your answer." }] },
+        },
+      ]),
+    );
+    const m = readConversation(path).messages;
+    assert.equal(m[0]!.role, "tool", "a command that only mentions it stays a tool row");
+    assert.deepEqual(
+      { role: m[1]!.role, text: m[1]!.text, question: m[1]!.question, tool: m[1]!.tool },
+      { role: "assistant", text: long, question: true, tool: undefined },
+    );
+    assert.equal(m[2]!.text, "Waiting on your answer.");
+    writeFileSync(
+      codexPath,
+      jsonl([
+        { type: "session_meta", payload: { id: "sid", cwd: "/p" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            call_id: "c1",
+            name: "exec_command",
+            arguments: JSON.stringify({ cmd: `cfind ask "Pick A or B?"` }),
+          },
+        },
+        { type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "ok" } },
+      ]),
+    );
+    const c = readConversation(codexPath).messages;
+    assert.equal(c.length, 1);
+    assert.equal(c[0]!.role, "assistant");
+    assert.equal(c[0]!.text, "Pick A or B?");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a thinking update shows as the agent's message, like in the terminal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-chat-")),
+    path = join(dir, "s.jsonl");
+  const think = (uuid: string, thinking: string, thinkingDisplay?: string) => ({
+    type: "assistant",
+    uuid,
+    thinkingDisplay,
+    message: { content: [{ type: "thinking", thinking, signature: "sig" }] },
+  });
+  try {
+    writeFileSync(
+      path,
+      jsonl([
+        think("a1", "", "updates"),
+        think("a2", "Confirmed: the data is still there, just renamed.", "updates"),
+        think("a3", "Raw reasoning the terminal never shows."),
+      ]),
+    );
+    assert.deepEqual(
+      readConversation(path).messages.map((m) => [m.role, m.text]),
+      [["assistant", "Confirmed: the data is still there, just renamed."]],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

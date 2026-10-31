@@ -1,6 +1,7 @@
 /** Structured local transcripts for the dashboard chat view. Remote sessions keep
  *  the line renderer, because store.py is the copy that runs on remote machines. */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { askCommand, askScript } from "./asks.ts";
 import {
   codexText,
   plainText,
@@ -25,6 +26,8 @@ export interface ChatMessage {
   tool?: ChatTool;
   /** Data URLs of images in a user message. */
   images?: string[];
+  /** The agent's `cfind ask` question, shown in full in place of the command. */
+  question?: boolean;
 }
 
 const MAX_MESSAGES = 400,
@@ -176,6 +179,17 @@ class Parser {
     this.tools.set(id, m);
     this.push(m);
   }
+  /** The agent's `cfind ask` question: its own message, in full, not a cut-off
+   *  command row. The call's output is dropped with it. */
+  private ask(id: string, question: string, time?: number) {
+    this.push({
+      id,
+      role: "assistant",
+      text: clean(question),
+      time,
+      question: true,
+    });
+  }
   private result(id: string, output: string, error = false) {
     const m = this.tools.get(id);
     if (m?.tool) {
@@ -221,6 +235,23 @@ class Parser {
         this.push({ id, role: "assistant", text: clean(text), time });
     } else if (p.type === "function_call" || p.type === "custom_tool_call") {
       const raw = String(p.arguments ?? p.input ?? "");
+      let asked: string | undefined;
+      // A script with more than the one call keeps its tool row.
+      if (p.type === "custom_tool_call")
+        asked =
+          raw.match(/exec_command/g)?.length === 1
+            ? askScript(raw, true)
+            : undefined;
+      else
+        try {
+          const a = JSON.parse(raw),
+            cmd = a.cmd ?? a.command;
+          asked = askCommand(
+            Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? ""),
+            true,
+          );
+        } catch {}
+      if (asked) return this.ask(String(p.call_id ?? id), asked, time);
       this.tool(
         String(p.call_id ?? id),
         String(p.name ?? "tool"),
@@ -338,14 +369,28 @@ class Parser {
         });
     } else if (kind === "assistant") {
       (Array.isArray(content) ? content : []).forEach((b: any, i: number) => {
-        if (b?.type === "text" && String(b.text ?? "").trim())
+        // With thinkingDisplay "updates", the terminal shows the few thinking
+        // blocks that carry text as the agent's own lines.
+        const said =
+          b?.type === "text"
+            ? b.text
+            : b?.type === "thinking" && entry["thinkingDisplay"] === "updates"
+              ? b.thinking
+              : "";
+        if (String(said ?? "").trim())
           this.push({
             id: `${entry["uuid"] ?? this.count}:${i}`,
             role: "assistant",
-            text: clean(String(b.text).trim()),
+            text: clean(String(said).trim()),
             time,
           });
-        if (b?.type === "tool_use")
+        if (b?.type !== "tool_use") return;
+        const asked =
+          b.name === "Bash" && typeof b.input?.command === "string"
+            ? askCommand(b.input.command, true)
+            : undefined;
+        if (asked) this.ask(String(b.id), asked, time);
+        else
           this.tool(
             String(b.id),
             String(b.name ?? "tool"),
