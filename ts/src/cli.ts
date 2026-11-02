@@ -40,6 +40,7 @@ search, read and talk to them.
   cfind                                    start the dashboard service
   cfind daemon [start|stop|status|install]  manage the dashboard service
   cfind ask "QUESTION"                     for agents: mark this chat as waiting for your answer
+  cfind title "WHAT YOU ARE DOING"         for agents: name this chat on the dashboard
 
   --onboard-external  add a machine to ~/.context-find/hosts, interactively
   --list-machines     show every machine this can index, and what it holds
@@ -199,6 +200,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   // finds the call in the transcript, so there is nothing to do here.
   if (positionals[0] === "ask") {
     printTerminalText("cfind: this chat now shows as waiting for your answer.");
+    return 0;
+  }
+  // The same for the chat's title.
+  if (positionals[0] === "title") {
+    const title = positionals.slice(1).join(" ").trim();
+    if (!title) {
+      printTerminalError('Usage: cfind title "WHAT YOU ARE DOING"');
+      return 1;
+    }
+    printTerminalText(`cfind: this chat is now titled "${title}".`);
     return 0;
   }
 

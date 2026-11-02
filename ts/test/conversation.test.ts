@@ -576,3 +576,42 @@ test("a thinking update shows as the agent's message, like in the terminal", () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a cfind title call shows as a grey note, not a command row", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-chat-")),
+    path = join(dir, "s.jsonl"),
+    codexPath = join(dir, "rollout.jsonl");
+  try {
+    writeFileSync(
+      path,
+      jsonl([
+        {
+          type: "assistant",
+          uuid: "a1",
+          message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: `cfind title "Fix the board sort"` } }] },
+        },
+        { type: "user", uuid: "r1", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
+      ]),
+    );
+    assert.deepEqual(
+      readConversation(path).messages.map((m) => [m.role, m.text, m.tool]),
+      [["note", "Title: Fix the board sort", undefined]],
+    );
+    writeFileSync(
+      codexPath,
+      jsonl([
+        { type: "session_meta", payload: { id: "sid", cwd: "/p" } },
+        {
+          type: "response_item",
+          payload: { type: "function_call", call_id: "c1", name: "exec_command", arguments: JSON.stringify({ cmd: `cfind title "Write tests"` }) },
+        },
+      ]),
+    );
+    assert.deepEqual(
+      readConversation(codexPath).messages.map((m) => [m.role, m.text]),
+      [["note", "Title: Write tests"]],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

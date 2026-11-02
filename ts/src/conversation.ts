@@ -1,7 +1,7 @@
 /** Structured local transcripts for the dashboard chat view. Remote sessions keep
  *  the line renderer, because store.py is the copy that runs on remote machines. */
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { askCommand, askScript } from "./asks.ts";
+import { askCommand, askScript, titleCommand, titleScript } from "./asks.ts";
 import {
   codexText,
   plainText,
@@ -190,6 +190,10 @@ class Parser {
       question: true,
     });
   }
+  /** The agent's `cfind title`: a grey line, not a command row. */
+  private titled(id: string, title: string, time?: number) {
+    this.push({ id, role: "note", text: `Title: ${clean(title)}`, time });
+  }
   private result(id: string, output: string, error = false) {
     const m = this.tools.get(id);
     if (m?.tool) {
@@ -235,23 +239,23 @@ class Parser {
         this.push({ id, role: "assistant", text: clean(text), time });
     } else if (p.type === "function_call" || p.type === "custom_tool_call") {
       const raw = String(p.arguments ?? p.input ?? "");
-      let asked: string | undefined;
+      let asked: string | undefined, titled: string | undefined;
       // A script with more than the one call keeps its tool row.
-      if (p.type === "custom_tool_call")
-        asked =
-          raw.match(/exec_command/g)?.length === 1
-            ? askScript(raw, true)
-            : undefined;
-      else
+      if (p.type === "custom_tool_call") {
+        if (raw.match(/exec_command/g)?.length === 1) {
+          asked = askScript(raw, true);
+          titled = titleScript(raw);
+        }
+      } else
         try {
           const a = JSON.parse(raw),
-            cmd = a.cmd ?? a.command;
-          asked = askCommand(
-            Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? ""),
-            true,
-          );
+            cmd = a.cmd ?? a.command,
+            command = Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? "");
+          asked = askCommand(command, true);
+          titled = titleCommand(command);
         } catch {}
       if (asked) return this.ask(String(p.call_id ?? id), asked, time);
+      if (titled) return this.titled(String(p.call_id ?? id), titled, time);
       this.tool(
         String(p.call_id ?? id),
         String(p.name ?? "tool"),
@@ -385,11 +389,11 @@ class Parser {
             time,
           });
         if (b?.type !== "tool_use") return;
-        const asked =
-          b.name === "Bash" && typeof b.input?.command === "string"
-            ? askCommand(b.input.command, true)
-            : undefined;
+        const bash = b.name === "Bash" && typeof b.input?.command === "string",
+          asked = bash ? askCommand(b.input.command, true) : undefined,
+          titled = bash ? titleCommand(b.input.command) : undefined;
         if (asked) this.ask(String(b.id), asked, time);
+        else if (titled) this.titled(String(b.id), titled, time);
         else
           this.tool(
             String(b.id),
