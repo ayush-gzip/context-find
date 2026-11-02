@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { askCommand, askReply, askScript } from "../src/asks.ts";
+import { askCommand, askReply, askScript, titleCommand, titleScript } from "../src/asks.ts";
 import { Monitor } from "../src/monitor.ts";
 import { AgentWorkspace } from "../src/agents.ts";
 
@@ -212,4 +212,65 @@ test("cfind ask exits 0 and says what it did", () => {
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /waiting for your answer/);
+});
+
+test("cfind title calls are found like cfind ask, and clipped", () => {
+  assert.equal(titleCommand(`cfind title "Fix the board sort"`), "Fix the board sort");
+  assert.equal(titleCommand(`/bin/zsh -lc 'cfind title "Port the scripts"'`), "Port the scripts");
+  assert.equal(titleCommand(`cfind title Review **PR 5**`), "Review PR 5");
+  assert.equal(titleCommand(`cfind title`), undefined, "no title, no change");
+  assert.equal(titleCommand(`cfind title "${"long ".repeat(30)}"`)!.length, 60);
+  assert.equal(titleCommand(`grep -n "cfind title" src`), undefined);
+  assert.equal(titleCommand(`cfind ask "Go?"`), undefined);
+  assert.equal(
+    titleScript(`text(await tools.exec_command({cmd:"cfind title \\"Write tests\\""}))`),
+    "Write tests",
+  );
+});
+
+test("cfind title exits 0 and needs a title", () => {
+  const cli = join(import.meta.dirname, "..", "dist", "cli.js"),
+    ok = spawnSync(process.execPath, [cli, "title", "Fix", "the sort"], { encoding: "utf8" }),
+    empty = spawnSync(process.execPath, [cli, "title"], { encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /titled "Fix the sort"/);
+  assert.equal(empty.status, 1);
+  assert.match(empty.stderr, /Usage: cfind title/);
+});
+
+test("a dashboard agent takes its cfind title as its name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cfind-title-agent-")),
+    prior = process.env.CFIND_CLAUDE_BIN;
+  writeFileSync(
+    join(dir, "claude"),
+    `#!/usr/bin/env node
+const send=o=>console.log(JSON.stringify(o));
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line);if(m.type!=='user')return;
+ send({type:'system',subtype:'init',session_id:'s',model:'opus'});
+ send({type:'assistant',message:{id:'m1',content:[{type:'tool_use',id:'t1',name:'Bash',input:{command:'cfind title "Fix the login bug"'}}]}});
+ send({type:'user',message:{content:[{type:'tool_result',tool_use_id:'t1',content:'ok'}]}});
+ send({type:'assistant',message:{id:'m2',content:[{type:'text',text:'Done.'}]}});
+ send({type:'result',subtype:'success',is_error:false,result:''});
+});`,
+    { mode: 0o700 },
+  );
+  process.env.CFIND_CLAUDE_BIN = join(dir, "claude");
+  const w = new AgentWorkspace([{ id: "claude", source: "claude", label: "Claude", path: dir }], join(dir, "data"));
+  try {
+    const a = await w.create("claude", dir, "the login page throws on submit");
+    const end = Date.now() + 5000;
+    while (!(a.state === "idle" && a.messages.some((m) => m.text === "Done."))) {
+      if (Date.now() > end) throw new Error("Condition timed out");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(a.title, "Fix the login bug");
+    const t = a.messages.find((m) => m.id === "t1")!;
+    assert.deepEqual({ role: t.role, text: t.text, tool: t.tool }, { role: "note", text: "Title: Fix the login bug", tool: undefined });
+  } finally {
+    w.close();
+    if (prior === undefined) delete process.env.CFIND_CLAUDE_BIN;
+    else process.env.CFIND_CLAUDE_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

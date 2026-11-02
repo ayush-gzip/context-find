@@ -17,7 +17,7 @@ import { CodexRPC } from "./codex.ts";
 import { formFields, formContent } from "./elicitation.ts";
 import { uploadPath, uploadType } from "./uploads.ts";
 import { startInTmux } from "./live.ts";
-import { askCommand, askReply, clip as clipAsk } from "./asks.ts";
+import { askCommand, askReply, clip as clipAsk, titleCommand } from "./asks.ts";
 import { recordSignal } from "./collector.ts";
 
 export interface Message {
@@ -130,14 +130,19 @@ function pushTool(
   // The agent's `cfind ask` question shows in full, not as a cut-off command
   // row. A `!` command the user typed is not the agent asking.
   const command = typeof input === "string" ? input : (input as any)?.command,
-    asked =
+    agent =
       (name === "Bash" || (name === "Shell" && !summary.startsWith("! "))) &&
-      typeof command === "string"
-        ? askCommand(command, true)
-        : undefined;
+      typeof command === "string",
+    asked = agent ? askCommand(command, true) : undefined,
+    titled = agent ? titleCommand(command) : undefined;
   if (asked) {
     push(a, "assistant", asked, id);
     a.messages[a.messages.length - 1]!.question = true;
+    return;
+  }
+  if (titled) {
+    a.title = titled;
+    push(a, "note", `Title: ${titled}`, id);
     return;
   }
   push(a, "tool", summary.split(/\s+/).join(" ").slice(0, 300), id);

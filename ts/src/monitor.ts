@@ -16,7 +16,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { codexRoots, projectsRoots } from "./store.ts";
 import { stripPasteTags } from "./conversation.ts";
-import { askCommand, askReply, askScript } from "./asks.ts";
+import {
+  askCommand,
+  askReply,
+  askScript,
+  titleCommand,
+  titleScript,
+} from "./asks.ts";
 
 export interface Profile {
   id: string;
@@ -62,6 +68,8 @@ export interface ObservedSession {
   /** When you or the agent last wrote a message. Tool runs and other file
    *  writes move `updatedAt` but not this; the Agents board sorts by it. */
   lastActive?: number;
+  /** The title came from `cfind title` or /rename, so Claude's own does not replace it. */
+  named?: boolean;
   state: string;
   /** A live process (another window) owns this session. */
   open?: boolean;
@@ -255,6 +263,12 @@ function freshFile(
 }
 // Enough of the reply for its last paragraph; this is kept in the cache.
 const REPLY = 600;
+/** The agent's `cfind title`, or the user's /rename. The newest one wins. */
+function name(s: ObservedSession, title: string | undefined) {
+  if (!title) return;
+  s.title = title;
+  s.named = true;
+}
 function watchAsk(f: FileState, row: any) {
   if (row.isSidechain) return;
   const content = row.message?.content,
@@ -270,8 +284,10 @@ function watchAsk(f: FileState, row: any) {
   if (row.type === "assistant" && Array.isArray(content))
     for (const c of content) {
       if (c?.type === "text" && c.text?.trim()) f.reply = c.text.slice(-REPLY);
-      if (c?.type === "tool_use" && typeof c.input?.command === "string")
+      if (c?.type === "tool_use" && typeof c.input?.command === "string") {
         f.ask = askCommand(c.input.command) ?? f.ask;
+        name(f.session, titleCommand(c.input.command));
+      }
     }
   // Codex: each turn starts with task_started.
   if (row.type === "event_msg" && p?.type === "task_started")
@@ -284,13 +300,17 @@ function watchAsk(f: FileState, row: any) {
       .join("\n");
     if (t.trim()) f.reply = t.slice(-REPLY);
   }
-  if (p?.type === "custom_tool_call" && typeof p.input === "string")
+  if (p?.type === "custom_tool_call" && typeof p.input === "string") {
     f.ask = askScript(p.input) ?? f.ask;
+    name(f.session, titleScript(p.input));
+  }
   if (p?.type === "function_call" && typeof p.arguments === "string")
     try {
       const a = JSON.parse(p.arguments),
-        cmd = a.cmd ?? a.command;
-      f.ask = askCommand(Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? "")) ?? f.ask;
+        cmd = a.cmd ?? a.command,
+        command = Array.isArray(cmd) ? cmd.join(" ") : String(cmd ?? "");
+      f.ask = askCommand(command) ?? f.ask;
+      name(f.session, titleCommand(command));
     } catch {}
 }
 function consume(f: FileState, row: any, mtime: number) {
@@ -309,6 +329,11 @@ function consume(f: FileState, row: any, mtime: number) {
   }
   if (row.type === "turn_context" && typeof row.payload?.model === "string")
     s.model = row.payload.model;
+  // Claude Code names the session once; better than its first message.
+  if (row.type === "ai-title" && typeof row.aiTitle === "string" && !s.named)
+    s.title = row.aiTitle.trim().slice(0, 220) || s.title;
+  if (row.type === "custom-title" && typeof row.customTitle === "string")
+    name(s, row.customTitle.trim().slice(0, 220));
   if (
     row.type === "user" ||
     (row.type === "response_item" && row.payload?.role === "user")
@@ -434,7 +459,7 @@ export class Monitor {
       const saved = JSON.parse(
         readFileSync(join(this.dataDir, "metrics.json"), "utf8"),
       );
-      if (saved.version === 5) this.cache = saved.files;
+      if (saved.version === 6) this.cache = saved.files;
     } catch {}
   }
   subscribe(fn: () => void) {
@@ -611,7 +636,7 @@ export class Monitor {
     const path = join(this.dataDir, "metrics.json");
     writeFileSync(
       path + ".tmp",
-      JSON.stringify({ version: 5, files: this.cache }),
+      JSON.stringify({ version: 6, files: this.cache }),
       { mode: 0o600 },
     );
     renameSync(path + ".tmp", path);

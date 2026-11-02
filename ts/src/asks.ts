@@ -11,31 +11,54 @@ export const clip = (text: string) => {
   return t.length > MAX ? t.slice(0, MAX - 1) + "…" : t;
 };
 
-/** The words after `cfind ask`: the quoted question, or the rest of the line.
- *  `full` keeps all of it as written, for the chat; the ask itself is clipped. */
-function question(rest: string, full = false) {
+/** The words after `cfind ask` or `cfind title`: the quoted text, or the rest of the line. */
+function words(rest: string) {
   // Inside a Codex exec script the command is a JS string, so its quotes are escaped.
   const r = rest.replace(/\\(["'])/g, "$1").trim();
-  const quoted = /^(["'])([\s\S]*?)\1/.exec(r),
-    q = quoted ? quoted[2]! : r.split(/[\n;&|"'`]/)[0]!;
-  return (full ? q.trim() : clip(q)) || "Waiting for your answer";
+  const quoted = /^(["'])([\s\S]*?)\1/.exec(r);
+  return (quoted ? quoted[2]! : r.split(/[\n;&|"'`]/)[0]!).trim();
 }
 
-/** The question when a shell command is the `cfind ask` call itself. Codex runs
- *  commands as `zsh -lc '…'`. A command that only mentions it does not count. */
-export function askCommand(command: string, full = false): string | undefined {
+/** `full` keeps all of the question as written, for the chat; the ask itself is clipped. */
+function question(rest: string, full = false) {
+  const q = words(rest);
+  return (full ? q : clip(q)) || "Waiting for your answer";
+}
+
+/** What follows `cfind <verb>` when a shell command is that call itself. Codex
+ *  runs commands as `zsh -lc '…'`. A command that only mentions it does not count. */
+function call(verb: string, command: string) {
   let c = command.trim();
   const shell = /^(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+(["'])([\s\S]*)\1$/.exec(c);
   if (shell) c = shell[2]!.trim();
-  const m = /^cfind\s+ask\b([\s\S]*)$/.exec(c);
-  return m ? question(m[1]!, full) : undefined;
+  return new RegExp(`^cfind\\s+${verb}\\b([\\s\\S]*)$`).exec(c)?.[1];
 }
 
 /** The same call in a Codex exec script: `tools.exec_command({cmd:"cfind ask \"…\""})`. */
-export function askScript(script: string, full = false): string | undefined {
-  const m = /\bcmd["']?\s*:\s*["'`]\s*cfind\s+ask\b([^\n]*)/.exec(script);
-  return m ? question(m[1]!, full) : undefined;
+function scriptCall(verb: string, script: string) {
+  return new RegExp(`\\bcmd["']?\\s*:\\s*["'\`]\\s*cfind\\s+${verb}\\b([^\\n]*)`).exec(script)?.[1];
 }
+
+/** The question when a shell command is the `cfind ask` call itself. */
+export function askCommand(command: string, full = false): string | undefined {
+  const rest = call("ask", command);
+  return rest === undefined ? undefined : question(rest, full);
+}
+
+export function askScript(script: string, full = false): string | undefined {
+  const rest = scriptCall("ask", script);
+  return rest === undefined ? undefined : question(rest, full);
+}
+
+// `cfind title "<what the agent is doing>"` names the chat on the board.
+const TITLE = 60;
+const title = (rest: string | undefined) => {
+  const t = rest === undefined ? "" : clip(words(rest));
+  return t ? (t.length > TITLE ? t.slice(0, TITLE - 1) + "…" : t) : undefined;
+};
+
+export const titleCommand = (command: string) => title(call("title", command));
+export const titleScript = (script: string) => title(scriptCall("title", script));
 
 const ASKING = [
   /\?[)*_"'”\s]*$/,

@@ -112,7 +112,7 @@ test("version 2 metrics are rebuilt from transcripts to correct synthetic model 
     await restarted.refresh();
     assert.equal(restarted.snapshot().sessions[0]!.model, "opus");
     assert.equal(restarted.snapshot().profiles[0]!.tokens.output, 3);
-    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 5);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 6);
   } finally {
     rmSync(f.home, { recursive: true, force: true });
   }
@@ -165,6 +165,52 @@ test("lastActive is the last message you or the agent wrote, not the last file w
     assert.ok(c.updatedAt >= at("10:08:00"));
     assert.equal(x.lastActive, at("09:02:00"));
     assert.ok(x.updatedAt >= at("09:09:00"));
+  } finally {
+    rmSync(f.home, { recursive: true, force: true });
+  }
+});
+test("the title is the agent's cfind title, else Claude's own title, else the first message", async () => {
+  const f = fixture();
+  try {
+    const row = (type: string, t: string, extra: object) => ({
+        type,
+        timestamp: `2026-10-27T${t}Z`,
+        sessionId: "s1",
+        cwd: "/project",
+        ...extra,
+      }),
+      lines = (rows: object[]) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
+      title = (command: string, extra: object = {}) => ({
+        message: { id: "m" + command.length, content: [{ type: "tool_use", id: "t" + command.length, name: "Bash", input: { command } }] },
+        ...extra,
+      }),
+      first = row("user", "10:00:00", { message: { role: "user", content: "the board sorts by the wrong time" } }),
+      ai = (t: string) => ({ type: "ai-title", aiTitle: "Fix board sort order", sessionId: "s1", timestamp: `2026-10-27T${t}Z` }),
+      file = (name: string, rows: object[]) =>
+        writeFileSync(join(f.roots[0]!.path, name), lines(rows.map((r) => ({ ...r, sessionId: name }))));
+    file("plain.jsonl", [first]);
+    file("ai.jsonl", [first, ai("10:00:05")]);
+    file("named.jsonl", [
+      first,
+      ai("10:00:05"),
+      row("assistant", "10:01:00", title(`cfind title "Sort the board"`)),
+      row("assistant", "10:02:00", title(`grep -n "cfind title" src`)),
+      row("assistant", "10:03:00", title(`cfind title "Write the sort tests"`, {})),
+      row("assistant", "10:04:00", title(`cfind title "A subagent's task"`, { isSidechain: true })),
+      ai("10:05:00"),
+    ]);
+    file("renamed.jsonl", [first, ai("10:00:05"), { type: "custom-title", customTitle: "Board work", sessionId: "s1" }, ai("10:06:00")]);
+    const monitor = new Monitor(f.options);
+    await monitor.refresh();
+    const titles = Object.fromEntries(
+      monitor.snapshot().sessions.map((s) => [s.path.split("/").at(-1), s.title]),
+    );
+    assert.deepEqual(titles, {
+      "plain.jsonl": "the board sorts by the wrong time",
+      "ai.jsonl": "Fix board sort order",
+      "named.jsonl": "Write the sort tests",
+      "renamed.jsonl": "Board work",
+    });
   } finally {
     rmSync(f.home, { recursive: true, force: true });
   }
