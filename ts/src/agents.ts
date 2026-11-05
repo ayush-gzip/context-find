@@ -5,12 +5,13 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { monitorDir, type Profile } from "./monitor.ts";
 import { claudeCommands, codexCommands } from "./commands.ts";
 import { CodexRPC } from "./codex.ts";
@@ -97,9 +98,8 @@ function push(
 }
 const clip = (text: string) =>
   text.length > 8000 ? text.slice(0, 8000) + "\n…" : text;
-/** A tmux server keeps its own PATH, so the terminal gets Claude's full path. */
-function claudeBin() {
-  const name = process.env["CFIND_CLAUDE_BIN"] ?? "claude";
+/** A tmux server keeps its own PATH, so the terminal gets the tool's full path. */
+function toolBin(name: string) {
   if (name.includes("/")) return name;
   const dirs = [
     ...(process.env["PATH"] ?? "").split(":"),
@@ -819,28 +819,60 @@ export class AgentWorkspace {
       await gone;
       clearTimeout(hard);
     }
-    const dir = this.env(a.profile)["CLAUDE_CONFIG_DIR"],
-      started = startInTmux(a.cwd, [
-        "env",
-        ...[
-          "CLAUDECODE",
-          "CLAUDE_CODE_ENTRYPOINT",
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_AUTH_TOKEN",
-          ...(dir ? [] : ["CLAUDE_CONFIG_DIR"]),
-        ].flatMap((k) => ["-u", k]),
-        ...(dir ? [`CLAUDE_CONFIG_DIR=${dir}`] : []),
-        claudeBin(),
-        "--resume",
-        a.sid,
-        "--permission-mode",
-        a.permissionMode ?? "manual",
-        ...(a.pickedModel ? ["--model", a.pickedModel] : []),
-      ]);
+    const started = startInTmux(a.cwd, [
+      ...this.inTerminal(a.profile),
+      "--resume",
+      a.sid,
+      "--permission-mode",
+      a.permissionMode ?? "manual",
+      ...(a.pickedModel ? ["--model", a.pickedModel] : []),
+    ]);
     this.shellContext.delete(a.id);
     this.agents = this.agents.filter((x) => x !== a);
     this.emit();
     return { profile: a.profile, sid: a.sid, ...started };
+  }
+  /** Continues a closed session in a tmux window, with the message as its
+   *  first prompt. The message goes through a private file because tmux
+   *  refuses commands longer than 16 KB. */
+  resumeInTerminal(profile: string, cwd: string, sid: string, prompt: string) {
+    const codex = this.profile(profile).source === "codex",
+      file = join(tmpdir(), `cfind-prompt-${randomUUID()}`);
+    writeFileSync(file, prompt.replace(/\0/g, ""), { flag: "wx", mode: 0o600 });
+    let started;
+    try {
+      started = startInTmux(resolve(cwd), [
+        "sh",
+        "-c",
+        'p=$(cat -- "$1"); rm -f -- "$1"; shift; exec "$@" "$p"',
+        "sh",
+        file,
+        ...(codex
+          ? [toolBin(process.env["CFIND_CODEX_BIN"] ?? "codex"), "resume", sid]
+          : [...this.inTerminal(profile), "--resume", sid]),
+      ]);
+    } catch (e) {
+      rmSync(file, { force: true });
+      throw e;
+    }
+    return { profile, sid, ...started };
+  }
+  /** Claude in a tmux window: the tmux server's environment may hold another
+   *  profile's settings. */
+  private inTerminal(profile: string) {
+    const dir = this.env(profile)["CLAUDE_CONFIG_DIR"];
+    return [
+      "env",
+      ...[
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        ...(dir ? [] : ["CLAUDE_CONFIG_DIR"]),
+      ].flatMap((k) => ["-u", k]),
+      ...(dir ? [`CLAUDE_CONFIG_DIR=${dir}`] : []),
+      toolBin(process.env["CFIND_CLAUDE_BIN"] ?? "claude"),
+    ];
   }
   /** Auto runs commands without asking; manual asks before each one. */
   setMode(id: string, mode: string) {

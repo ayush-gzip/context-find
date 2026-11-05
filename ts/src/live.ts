@@ -36,9 +36,12 @@ function tmuxBin() {
   return found;
 }
 
-/** Starts a command in a new window of the detached tmux session `cfind` on the
- *  default server; the session is made on first use. tmux runs the arguments
- *  without a shell. Returns the new pane and its process. */
+const BATCH = 5;
+
+/** Starts a command in a new window of a detached tmux session on the default
+ *  server: `cfind`, then `cfind-2`, `cfind-3`… with at most five windows each.
+ *  A session is made on first use, and goes away with its last window. tmux
+ *  runs the arguments without a shell. Returns the new pane and its process. */
 export function startInTmux(cwd: string, command: string[]) {
   const tmux = tmuxBin(),
     // Not run(): its TZ=UTC would stay in a tmux server that this call starts.
@@ -47,17 +50,22 @@ export function startInTmux(cwd: string, command: string[]) {
         tmux,
         [...args, "-P", "-F", "#{pane_id} #{pane_pid}", "-c", cwd, ...command],
         { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
+      ).trim(),
+    // Empty when no tmux server runs.
+    windows = new Map<string, number>();
+  for (const name of quiet(tmux, ["list-windows", "-a", "-F", "#{session_name}"]).split("\n"))
+    if (name) windows.set(name, (windows.get(name) ?? 0) + 1);
+  let n = 1;
+  while ((windows.get(n === 1 ? "cfind" : `cfind-${n}`) ?? 0) >= BATCH) n++;
+  const name = n === 1 ? "cfind" : `cfind-${n}`,
+    add = () => start(["new-window", "-d", "-t", `${name}:`]),
+    make = () => start(["new-session", "-d", "-s", name, "-x", "160", "-y", "45"]);
   let line: string;
   try {
-    line = start(["new-window", "-d", "-t", "cfind:"]);
+    line = windows.has(name) ? add() : make();
   } catch {
-    try {
-      line = start(["new-session", "-d", "-s", "cfind", "-x", "160", "-y", "45"]);
-    } catch {
-      // Another start made the session in between.
-      line = start(["new-window", "-d", "-t", "cfind:"]);
-    }
+    // The session was made, or went away, in between.
+    line = windows.has(name) ? make() : add();
   }
   const [pane = "", pid = ""] = line.split(" ");
   if (!/^%\d+$/.test(pane) || !Number(pid))
