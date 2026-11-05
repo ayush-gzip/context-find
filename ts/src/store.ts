@@ -311,10 +311,38 @@ function matchSnippet(text: string, needle: string): string | null {
   return sanitizeTerminalText((from > 0 ? "…" : "") + clip + (from + MAX < line.length ? "…" : ""));
 }
 
+// Message text is about 1% of a transcript, so the daemon keeps it and reads a
+// file again only when its size or time changes.
+const searchCache = new Map<string, { size: number; mtime: number; text: string }>();
+function cachedSearchText(path: string, source: Source): string {
+  const { size, mtimeMs } = statSync(path),
+    hit = searchCache.get(path);
+  if (hit && hit.size === size && hit.mtime === mtimeMs) return hit.text;
+  const text = searchText(path, source);
+  searchCache.set(path, { size, mtime: mtimeMs, text });
+  return text;
+}
+
+/** Fills the search cache a file at a time, so the daemon keeps answering. */
+export async function warmSearch(): Promise<void> {
+  for (const [path, source] of transcripts()) {
+    try {
+      cachedSearchText(path, source);
+    } catch {
+      /* unreadable file, skip */
+    }
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
 export function searchLocalTranscripts(query = "", root?: string): Session[] {
   const started = Date.now();
   const needle = query.toLowerCase();
   const candidates = transcripts(root);
+  if (!root) {
+    const live = new Set(candidates.map(([path]) => path));
+    for (const path of searchCache.keys()) if (!live.has(path)) searchCache.delete(path);
+  }
   const found: Session[] = [];
   let skipped = 0;
   let errors = 0;
@@ -322,7 +350,7 @@ export function searchLocalTranscripts(query = "", root?: string): Session[] {
     try {
       let summary: string | null = null;
       if (needle) {
-        const text = searchText(path, source);
+        const text = cachedSearchText(path, source);
         if (!text.toLowerCase().includes(needle)) {
           skipped += 1;
           continue;

@@ -428,3 +428,17 @@ test("ago reads naturally at every scale", () => {
     assert.equal(relativeTime(gap === 0 ? 0 : now - gap, now), expected, String(gap));
   }
 });
+
+test("search reads a transcript again only when it changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "cfind-cache-")),
+    file = join(root, "proj", "s.jsonl"),
+    line = (text: string) => JSON.stringify({ type: "user", cwd: "/w/proj", timestamp: "2026-08-10T10:01:00Z", message: { content: text } }) + "\n";
+  mkdirSync(dirname(file));
+  writeFileSync(file, line("first words"));
+  assert.equal(searchLocalTranscripts("first", root).length, 1);
+  assert.equal(searchLocalTranscripts("later", root).length, 0);
+  // A new message changes the size, so the new text is found.
+  writeFileSync(file, line("first words") + line("later words"));
+  assert.equal(searchLocalTranscripts("later", root).length, 1);
+  assert.equal(searchLocalTranscripts("first", root).length, 1);
+});

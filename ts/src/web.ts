@@ -33,6 +33,7 @@ import {
   prettyPath,
   renderTranscript,
   sessionId,
+  warmSearch,
   type Line,
   type Session,
 } from "./store.ts";
@@ -180,6 +181,8 @@ export function createWebServer(
     if (!monitorStarted) {
       monitorStarted = true;
       monitor.start();
+      // The first full-text search then answers from memory.
+      void warmSearch();
     }
   };
   // Streams that asked for deltas (?delta=1) get the full snapshot once, then only
