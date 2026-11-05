@@ -33,6 +33,7 @@ import {
   prettyPath,
   renderTranscript,
   sessionId,
+  warmSearch,
   type Line,
   type Session,
 } from "./store.ts";
@@ -56,6 +57,7 @@ import {
   stopPane,
   sendToPane,
   takeOver,
+  typeText,
   zoomPane,
 } from "./live.ts";
 import { Devices, tailscaleHost } from "./devices.ts";
@@ -179,6 +181,8 @@ export function createWebServer(
     if (!monitorStarted) {
       monitorStarted = true;
       monitor.start();
+      // The first full-text search then answers from memory.
+      void warmSearch();
     }
   };
   // Streams that asked for deltas (?delta=1) get the full snapshot once, then only
@@ -687,7 +691,9 @@ export function createWebServer(
                 throw new Error("This session is not open in a terminal");
               if (data.action === "takeover") await takeOver(live);
               else if (data.action === "live-key")
-                sendKey(live, String(data.key));
+                typeof data.text === "string"
+                  ? typeText(live, data.text)
+                  : sendKey(live, String(data.key));
               else if (data.action === "live-zoom")
                 zoomPane(live, data.on === true);
               else if (data.action === "live-stop") await stopPane(live);

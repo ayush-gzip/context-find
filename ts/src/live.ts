@@ -231,6 +231,11 @@ const KEYS = new Set([
   "Tab",
   "BTab",
   "Space",
+  // Editing keys, for typing an answer in the terminal view.
+  "BSpace",
+  "DC",
+  "Home",
+  "End",
   ..."123456789",
   ..."abcdefghijklmnopqrstuvwxyz",
 ]);
@@ -246,6 +251,21 @@ export function sendKey(r: LiveRecord, key: string) {
   if (!r.tmux) throw new Error("This session is not in tmux");
   sameProcess(r);
   run(checkPane(r), ["send-keys", "-t", r.tmux, ...keys]);
+}
+
+/** Characters typed in the terminal view. They go through a paste buffer, not
+ *  send-keys, whose arguments tmux parses: a trailing ; would end the command.
+ *  No -p, so the program reads them as typing. Control characters go only as
+ *  named keys. */
+export function typeText(r: LiveRecord, text: string) {
+  const typed = text.replace(/[\x00-\x1f\x7f]/g, ""),
+    buffer = "cfind-" + randomBytes(4).toString("hex");
+  if (!typed || typed.length > 1000) throw new Error("Type up to 1000 characters");
+  if (!r.tmux) throw new Error("This session is not in tmux");
+  sameProcess(r);
+  const tmux = checkPane(r);
+  run(tmux, ["load-buffer", "-b", buffer, "-"], typed);
+  run(tmux, ["paste-buffer", "-d", "-r", "-b", buffer, "-t", r.tmux]);
 }
 
 /** Esc stops the reply or the ! command. A stopped ! command comes back into the

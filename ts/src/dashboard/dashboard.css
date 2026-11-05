@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  --bg: #fbfbfc;
+  --bg: #f5f5f7;
   --surface: #fff;
   --sidebar-bg: #ffffffb8;
   --glass-edge: #0000000f;
@@ -8,7 +8,7 @@
   --text: #18181b;
   --muted: #7a7a83;
   --secondary: #55555e;
-  --line: #ebebef;
+  --line: #e8e8ed;
   --field: #f4f4f6;
   --selection: #0000000a;
   --blue: #007aff;
@@ -22,9 +22,13 @@
   --tint-a: #dde7ff;
   --tint-b: #f2e4f6;
   --shadow: none;
-  --user-bubble: #eaf2ff;
+  /* Messages: blue for you, grey for the agent. */
+  --user-bubble: var(--blue);
   --composer-bg: #fff;
-  --agent-bubble: #f4f4f6;
+  --agent-bubble: #e9e9eb;
+  /* Cards float on the grey page instead of being outlined. */
+  --card-shadow:
+    0 0 0 0.5px #0000000d, 0 1px 2px #0000000a, 0 8px 24px -8px #0000001f;
   --code-bg: #f8f8fa;
   --code-inline: #0000000a;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
@@ -36,25 +40,26 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0e0e10;
-  --surface: #151517;
+  --bg: #000;
+  --surface: #1c1c1e;
   --sidebar-bg: #1a1a1d99;
   --glass-edge: #ffffff0f;
   --glass-shadow: 0 0 0 0.5px #00000080, 0 8px 28px #00000066;
   --text: #ededf0;
   --muted: #84848d;
   --secondary: #ababb4;
-  --line: #ffffff14;
-  --field: #1b1b1e;
+  --line: #ffffff17;
+  --field: #2c2c2e;
   --selection: #ffffff0d;
   --blue: #0a84ff;
   --green: #64d279;
   --tint-a: #1b2442;
   --tint-b: #2b1d34;
   --shadow: none;
-  --user-bubble: #172338;
-  --composer-bg: #1c1c1f;
-  --agent-bubble: #222226;
+  --user-bubble: var(--blue);
+  --composer-bg: #1c1c1e;
+  --agent-bubble: #26262a;
+  --card-shadow: 0 0 0 0.5px #ffffff14, 0 8px 24px -8px #00000099;
   --code-bg: #111113;
   --code-inline: #ffffff0f;
   --hover: #ffffff08;
@@ -141,7 +146,7 @@ textarea,
 select {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   width: 100%;
   padding: 5px 10px;
   outline: none;
@@ -258,12 +263,12 @@ textarea::placeholder {
   width: 100%;
   padding: 0 8px;
   margin-bottom: 1px;
-  border-radius: 6px;
+  border-radius: 8px;
   text-align: left;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 450;
   transition: background 0.1s;
-  height: 28px;
+  height: 30px;
 }
 .nav-item > span:first-child {
   display: flex;
@@ -274,7 +279,8 @@ textarea::placeholder {
   background: var(--hover);
 }
 .nav-item.active {
-  background: var(--selection);
+  background: color-mix(in srgb, var(--blue) 13%, transparent);
+  color: var(--blue);
   font-weight: 550;
 }
 .nav-item.active > span:first-child {
@@ -362,8 +368,8 @@ textarea::placeholder {
   display: none;
 }
 .breadcrumb b {
-  font-weight: 500;
-  color: var(--secondary);
+  font-weight: 600;
+  color: var(--text);
 }
 .header-actions {
   display: flex;
@@ -417,7 +423,7 @@ textarea::placeholder {
   background: transparent;
   border: 1px solid var(--line);
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 12px;
   line-height: 1.4;
   white-space: nowrap;
@@ -468,17 +474,19 @@ main {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  margin-bottom: 20px;
+  margin: 6px 0 24px;
 }
+/* A large title, as in Apple apps; the bar's small title comes in once it
+   scrolls away. */
 .page-heading h1 {
-  font-size: 20px;
-  line-height: 1.3;
-  font-weight: 600;
-  letter-spacing: var(--track-display);
-  margin: 0 0 2px;
+  font-size: 28px;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: var(--track-hero);
+  margin: 0 0 4px;
 }
 .page-heading p {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
   margin: 0;
@@ -510,9 +518,9 @@ main {
   margin-bottom: 16px;
 }
 .panel {
-  border-radius: 8px;
+  border-radius: 14px;
   background: var(--surface);
-  border: 1px solid var(--line);
+  box-shadow: var(--card-shadow);
   overflow: hidden;
 }
 .quota-card {
@@ -574,6 +582,10 @@ main {
   margin: 14px 0 10px;
 }
 .quota-number {
+  font-family:
+    ui-rounded,
+    -apple-system,
+    sans-serif;
   font-size: 28px;
   line-height: 1.15;
   font-weight: 600;
@@ -679,9 +691,9 @@ main {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: var(--track-body);
+  letter-spacing: var(--track-title);
   margin: 0;
 }
 .panel-title > .faint {
@@ -723,9 +735,13 @@ main {
   letter-spacing: var(--track-caption);
 }
 .stat-value {
+  font-family:
+    ui-rounded,
+    -apple-system,
+    sans-serif;
   font-size: 22px;
   line-height: 1.3;
-  font-weight: 550;
+  font-weight: 600;
   letter-spacing: var(--track-display);
   font-variant-numeric: tabular-nums;
   margin-top: 0;
@@ -914,9 +930,9 @@ main {
   margin: 20px 0 10px;
 }
 .section-heading h2 {
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 600;
-  letter-spacing: var(--track-title);
+  letter-spacing: var(--track-headline);
   margin: 0;
 }
 .section-sub {
@@ -950,22 +966,27 @@ main {
   align-items: start;
 }
 .agent-card {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 14px;
+  border: 0;
+  border-radius: 14px;
   background: var(--surface);
+  box-shadow: var(--card-shadow);
   text-align: left;
   min-width: 0;
   transition:
-    border-color 0.1s,
+    box-shadow 0.15s,
     background 0.1s,
     scale var(--spring-dur) var(--spring);
 }
 .agent-card:hover {
-  border-color: var(--line-strong);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    var(--card-shadow);
 }
 .agent-card.active {
-  border-color: var(--blue);
+  box-shadow:
+    0 0 0 2px var(--blue),
+    var(--card-shadow);
 }
 .agent-top {
   display: flex;
@@ -1066,8 +1087,9 @@ main {
   position: relative;
   overflow-wrap: anywhere;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
   padding: 8px 10px;
   margin-bottom: 6px;
   font-size: 12px;
@@ -1583,19 +1605,31 @@ html:has(.drawer.full:not([hidden])) {
 .bubble {
   max-width: 100%;
   min-width: 0;
-  padding: 9px 13px;
-  border-radius: 10px;
+  padding: 9px 14px;
+  border-radius: 18px;
   font-size: 13.5px;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .msg.user .bubble {
   background: var(--user-bubble);
-  border-top-right-radius: 3px;
+  color: #fff;
+  border-bottom-right-radius: 6px;
+}
+.msg.user .bubble a {
+  color: inherit;
+  text-decoration: underline;
+}
+.msg.user .bubble code {
+  background: #ffffff2e;
+}
+.msg.user .bubble .md-code,
+.msg.user .bubble table {
+  color: var(--text);
 }
 .msg.agent .bubble {
   background: var(--agent-bubble);
-  border-top-left-radius: 3px;
+  border-bottom-left-radius: 6px;
 }
 .msg-images {
   display: flex;
@@ -2015,7 +2049,7 @@ html:has(.drawer.full:not([hidden])) {
   gap: 6px;
   padding: 10px 10px 8px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 18px;
+  border-radius: 22px;
   background: var(--composer-bg);
   box-shadow:
     0 1px 2px #0000000a,
@@ -2077,7 +2111,10 @@ html:has(.drawer.full:not([hidden])) {
   height: 15px;
   stroke-width: 2.2;
 }
-.round-button.send,
+.round-button.send {
+  background: var(--blue);
+  color: #fff;
+}
 .round-button.stop {
   background: var(--text);
   color: var(--surface);
@@ -3315,7 +3352,19 @@ dialog:not([open])::backdrop {
     border-color: transparent;
   }
 }
+/* The bar's small title comes in as the large title scrolls away. */
+@keyframes title-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
 @supports (animation-timeline: scroll()) {
+  .breadcrumb b {
+    animation: title-in linear both;
+    animation-timeline: scroll(root);
+    animation-range: 30px 70px;
+  }
   .topbar {
     border-bottom-color: transparent;
     animation: edge-in linear both;

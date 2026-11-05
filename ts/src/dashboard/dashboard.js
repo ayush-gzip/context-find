@@ -1563,19 +1563,37 @@ async function zoomTerm(on) {
     toast(error.message);
   }
 }
-async function sendTermKey(key) {
+// Keys go one request at a time, so fast typing arrives in order; letters typed
+// while one is on its way go together.
+const termQueue = [];
+let termSending = false;
+function sendTermKey(key) {
+  queueTerm({ key });
+}
+function queueTerm(item) {
+  const last = termQueue.at(-1);
+  if (item.text && last?.text) last.text += item.text;
+  else termQueue.push(item);
+  if (!termSending) void drainTerm();
+}
+async function drainTerm() {
   const s = S.view?.s;
-  if (!s) return;
+  if (!s) return void (termQueue.length = 0);
+  termSending = true;
   try {
-    await api("agent", {
-      action: "live-key",
-      profile: s.profile,
-      sid: s.id,
-      key,
-    });
-    setTimeout(pollTerm, 120);
+    while (termQueue.length)
+      await api("agent", {
+        action: "live-key",
+        profile: s.profile,
+        sid: s.id,
+        ...termQueue.shift(),
+      });
   } catch (error) {
+    termQueue.length = 0;
     toast(error.message);
+  } finally {
+    termSending = false;
+    setTimeout(pollTerm, 120);
   }
 }
 const TERM_KEYS = {
@@ -1587,20 +1605,20 @@ const TERM_KEYS = {
   Escape: "Escape",
   Tab: "Tab",
   " ": "Space",
+  Backspace: "BSpace",
+  Delete: "DC",
+  Home: "Home",
+  End: "End",
 };
 /** Keys pressed while the card has focus go to the terminal. */
 function termKeyDown(e) {
   if (!e.target.closest?.(".term-card") || e.metaKey || e.ctrlKey || e.altKey)
     return false;
-  const key =
-    e.key === "Tab" && e.shiftKey
-      ? "BTab"
-      : /^[1-9a-z]$/.test(e.key)
-        ? e.key
-        : TERM_KEYS[e.key];
-  if (!key) return false;
+  const key = e.key === "Tab" && e.shiftKey ? "BTab" : TERM_KEYS[e.key];
+  // Any other single character, such as A, 0 or #, is typed as text.
+  if (!key && [...e.key].length !== 1) return false;
   e.preventDefault();
-  sendTermKey(key);
+  queueTerm(key ? { key } : { text: e.key });
   return true;
 }
 function markFind() {

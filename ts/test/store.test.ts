@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { relativeTime, conversationCounts, detectSource, header, renderTranscript, searchLocalTranscripts } from "../src/store.ts";
+import { relativeTime, conversationCounts, detectSource, eachEntry, header, renderTranscript, searchLocalTranscripts } from "../src/store.ts";
 import { debug } from "../src/debug.ts";
 import { appendHostSpec, buildHostSpec, hostDisplayName, readHosts, splitSpecTokens, buildSshArgv,
          readAgentSource as readSourceAgent } from "../src/remote.ts";
@@ -427,4 +427,29 @@ test("ago reads naturally at every scale", () => {
   for (const [gap, expected] of cases) {
     assert.equal(relativeTime(gap === 0 ? 0 : now - gap, now), expected, String(gap));
   }
+});
+
+test("search reads a transcript again only when it changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "cfind-cache-")),
+    file = join(root, "proj", "s.jsonl"),
+    line = (text: string) => JSON.stringify({ type: "user", cwd: "/w/proj", timestamp: "2026-08-10T10:01:00Z", message: { content: text } }) + "\n";
+  mkdirSync(dirname(file));
+  writeFileSync(file, line("first words"));
+  assert.equal(searchLocalTranscripts("first", root).length, 1);
+  assert.equal(searchLocalTranscripts("later", root).length, 0);
+  // A new message changes the size, so the new text is found.
+  writeFileSync(file, line("first words") + line("later words"));
+  assert.equal(searchLocalTranscripts("later", root).length, 1);
+  assert.equal(searchLocalTranscripts("first", root).length, 1);
+});
+
+test("transcript lines are read the same when they cross 1 MB pieces", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "cfind-lines-")), "s.jsonl"),
+    // 3-byte characters, so some pieces end inside one; a line of about 3 MB spans four.
+    long = { type: "user", message: { content: "é€".repeat(700_000) } },
+    lines = [JSON.stringify({ type: "a" }), "", "{not json", JSON.stringify(long), "[1]", JSON.stringify({ type: "b" })];
+  writeFileSync(file, lines.join("\n"));
+  assert.deepEqual([...eachEntry(file)], [{ type: "a" }, long, { type: "b" }]);
+  writeFileSync(file, lines.join("\n") + "\n");
+  assert.deepEqual([...eachEntry(file)], [{ type: "a" }, long, { type: "b" }]);
 });
