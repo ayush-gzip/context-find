@@ -9,3 +9,7 @@ ts/dist/
 .DS_Store
 demo/home/
 demo/frames/
+demo/video/public/*.mp4
+demo/video/public/*.json
+demo/video/.cache/
+demo/video/out/
