@@ -18,6 +18,7 @@ import {
   sendKey,
   sendToPane,
   takeOver,
+  typeText,
 } from "../src/live.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "cfind-live-")),
@@ -141,6 +142,31 @@ test("the menu screen and its keys work while the session waits", () => {
   assert.throws(() => sendKey(waiting, "Enter"), /no longer runs/);
   assert.throws(() => capturePane(waiting), /no longer runs/);
   assert.doesNotMatch(calls(), /capture-pane|send-keys/);
+});
+
+test("the terminal view types any character as text and edits with named keys", () => {
+  process.env["FAKE_PANE_PID"] = String(process.ppid);
+  writeFileSync(log, "");
+  const r = record({ status: "waiting" });
+  typeText(r, "Hello, World! 0 a; #{pane_id} $HOME \\; é→");
+  typeText(r, "a\x1b[2J\x7fb\n");
+  for (const key of ["BSpace", "DC", "Home", "End"]) sendKey(r, key);
+  const lines = calls().split("\n");
+  assert.match(lines[1]!, /^load-buffer -b cfind-[0-9a-f]{8} -$/);
+  assert.equal(lines[2], "Hello, World! 0 a; #{pane_id} $HOME \\; é→");
+  assert.match(lines[3]!, /^paste-buffer -d -r -b cfind-[0-9a-f]{8} -t %7$/);
+  assert.equal(lines[6], "a[2Jb");
+  assert.deepEqual(calls().match(/send-keys .*/g), [
+    "send-keys -t %7 BSpace",
+    "send-keys -t %7 DC",
+    "send-keys -t %7 Home",
+    "send-keys -t %7 End",
+  ]);
+  for (const text of ["", "\x1b\n", "x".repeat(1001)])
+    assert.throws(() => typeText(r, text), /up to 1000/);
+  writeFileSync(log, "");
+  assert.throws(() => typeText(record({ procStart: "Mon Jan 1 00:00:00 2001" }), "a"), /Could not confirm/);
+  assert.equal(calls(), "");
 });
 
 test("take over stops only a verified process outside tmux", async () => {
