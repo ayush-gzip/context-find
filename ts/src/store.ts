@@ -5,7 +5,8 @@
  * and is the copy shipped to remote machines over ssh. test/golden.test.ts
  * renders the same fixture through both and fails if they ever drift.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { homedir } from "node:os";
 import { join, basename, dirname, resolve, sep } from "node:path";
 import { debug } from "./debug.ts";
@@ -185,19 +186,44 @@ function walk(dir: string, found: string[]): void {
 }
 
 export function entries(path: string): Record<string, any>[] {
-  const out: Record<string, any>[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        out.push(parsed);
-      }
-    } catch {
-      /* a partially written line is not fatal */
-    }
+  return [...eachEntry(path)];
+}
+
+function parseEntry(line: string): Record<string, any> | undefined {
+  if (!line.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+    /* a partially written line is not fatal */
   }
-  return out;
+  return undefined;
+}
+
+/** Entries one at a time, read in 1 MB pieces: a transcript can be hundreds of
+ *  MB, and holding all of it parsed at once costs the daemon that much memory. */
+export function* eachEntry(path: string): Generator<Record<string, any>> {
+  const fd = openSync(path, "r"),
+    buffer = Buffer.alloc(1 << 20),
+    decoder = new StringDecoder("utf8");
+  let rest = "";
+  try {
+    for (let n; (n = readSync(fd, buffer, 0, buffer.length, null)) > 0; ) {
+      // Only the new piece is searched, so a line of many MB is not scanned again each time.
+      const text = decoder.write(buffer.subarray(0, n));
+      let start = 0;
+      for (let end; (end = text.indexOf("\n", start)) !== -1; start = end + 1) {
+        const entry = parseEntry(rest + text.slice(start, end));
+        rest = "";
+        if (entry) yield entry;
+      }
+      rest += text.slice(start);
+    }
+    const last = parseEntry(rest + decoder.end());
+    if (last) yield last;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function plainText(content: unknown): string {
@@ -222,7 +248,7 @@ export function header(path: string, source?: Source): Header | null {
   if ((source ?? detectSource(path)) === "codex") return codexHeader(path);
   let cwd: string | null = null;
   let branch = "-";
-  for (const entry of entries(path)) {
+  for (const entry of eachEntry(path)) {
     if (entry["type"] !== "user" || !entry["cwd"]) continue;
     cwd = entry["cwd"];
     branch = entry["gitBranch"] || "-";
@@ -241,7 +267,7 @@ function stem(path: string): string {
 function codexHeader(path: string): Header | null {
   let cwd: string | null = null;
   let sid = "";
-  for (const entry of entries(path)) {
+  for (const entry of eachEntry(path)) {
     const payload = entry["payload"] ?? {};
     if (entry["type"] === "session_meta") {
       cwd = payload.cwd ?? null;
@@ -271,7 +297,7 @@ export function stripReminders(text: string): string {
 function searchText(path: string, source: Source): string {
   const parts: string[] = [];
   if (source === "codex") {
-    for (const entry of entries(path)) {
+    for (const entry of eachEntry(path)) {
       const p = entry["payload"] ?? {};
       if (entry["type"] !== "response_item" || p.type !== "message") continue;
       if (p.role !== "user" && p.role !== "assistant") continue;
@@ -279,7 +305,7 @@ function searchText(path: string, source: Source): string {
       if (t && !(p.role === "user" && startsWithCodexSkipped(t))) parts.push(t);
     }
   } else {
-    for (const entry of entries(path)) {
+    for (const entry of eachEntry(path)) {
       const role = entry["type"];
       if (role !== "user" && role !== "assistant") continue;
       let t = plainText(entry["message"]?.content).trim();
@@ -311,23 +337,30 @@ function matchSnippet(text: string, needle: string): string | null {
   return sanitizeTerminalText((from > 0 ? "…" : "") + clip + (from + MAX < line.length ? "…" : ""));
 }
 
-// Message text is about 1% of a transcript, so the daemon keeps it and reads a
-// file again only when its size or time changes.
-const searchCache = new Map<string, { size: number; mtime: number; text: string }>();
-function cachedSearchText(path: string, source: Source): string {
+// Message text is about 1% of a transcript, so the daemon keeps it, and the
+// header, and reads a file again only when its size or time changes.
+type Cached = { size: number; mtime: number; text: string; head?: Header | null };
+const searchCache = new Map<string, Cached>();
+function cached(path: string, source: Source): Cached {
   const { size, mtimeMs } = statSync(path),
     hit = searchCache.get(path);
-  if (hit && hit.size === size && hit.mtime === mtimeMs) return hit.text;
-  const text = searchText(path, source);
-  searchCache.set(path, { size, mtime: mtimeMs, text });
-  return text;
+  if (hit && hit.size === size && hit.mtime === mtimeMs) return hit;
+  const entry = { size, mtime: mtimeMs, text: searchText(path, source) };
+  searchCache.set(path, entry);
+  return entry;
+}
+const cachedSearchText = (path: string, source: Source) => cached(path, source).text;
+function cachedHeader(path: string, source: Source) {
+  const entry = cached(path, source);
+  if (entry.head === undefined) entry.head = header(path, source);
+  return entry.head;
 }
 
 /** Fills the search cache a file at a time, so the daemon keeps answering. */
 export async function warmSearch(): Promise<void> {
   for (const [path, source] of transcripts()) {
     try {
-      cachedSearchText(path, source);
+      cachedHeader(path, source);
     } catch {
       /* unreadable file, skip */
     }
@@ -357,7 +390,7 @@ export function searchLocalTranscripts(query = "", root?: string): Session[] {
         }
         summary = matchSnippet(text, needle);
       }
-      const head = header(path, source);
+      const head = cachedHeader(path, source);
       if (!head) {
         skipped += 1;
         continue;
