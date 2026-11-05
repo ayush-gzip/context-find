@@ -1312,7 +1312,7 @@ function composerState(a, s) {
       : {
           enabled: true,
           placeholder: "Continue this conversation…",
-          hint: `Sends to ${label} if it is open, or continues here · Enter to send`,
+          hint: `Sends to ${label} if it is open, or starts it in tmux · Enter to send`,
         };
   if (local && s.open && s.tmux && (idle || s.state === "running"))
     return {
@@ -1351,7 +1351,7 @@ function composerState(a, s) {
     : {
         enabled: true,
         placeholder: "Continue this conversation…",
-        hint: `Continues with ${label} in ${folder(s.cwd)} · Enter to send`,
+        hint: `Starts it in tmux in ${folder(s.cwd)} · Enter to send`,
       };
 }
 function renderChat() {
@@ -1688,7 +1688,21 @@ async function sendFromComposer() {
           prompt,
           images,
         });
-      if (created.queued) {
+      if (created.terminal) {
+        // Claude's pane shows until the session is live there. Codex sends
+        // later messages through its shared helper.
+        if (s.source === "claude")
+          S.opening = { path: s.path, until: Date.now() + 2 * 60 * 1000 };
+        if (prompt.startsWith("/")) {
+          drop();
+          S.term = { key, state: s.state, show: true };
+        } else
+          Object.assign(sent, {
+            dashed: true,
+            note: "Sent to its terminal, not read yet",
+          });
+        renderChat();
+      } else if (created.queued) {
         Object.assign(sent, {
           dashed: true,
           note: created.busy

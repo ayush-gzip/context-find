@@ -636,6 +636,33 @@ export function createWebServer(
                   ["running", "waiting", "stale"].includes(session.state))
               )
                 throw new Error("Resume requires an inactive local session");
+              if (data.sid) {
+                const t = workspace.resumeInTerminal(
+                    session!.profile,
+                    session!.cwd,
+                    session!.id,
+                    withPaths(data.prompt, images),
+                  ),
+                  key = `${t.profile}|${t.sid}`;
+                started.set(key, {
+                  profile: t.profile,
+                  sessionId: t.sid,
+                  pid: t.pid,
+                  procStart: procStart(t.pid),
+                  tmux: t.pane,
+                  status: "busy",
+                  updatedAt: Date.now(),
+                });
+                // A wrong session id or folder ends the program at once.
+                await new Promise((r) => setTimeout(r, 1500));
+                if (!terminalOf(t.profile, t.sid))
+                  throw new Error(
+                    "The terminal closed right away. Resume the session in a terminal to see why.",
+                  );
+                // Phone apps before this read `queued` and would fail on the rest.
+                ok({ terminal: true, queued: true, profile: t.profile, sid: t.sid });
+                return;
+              }
               ok(
                 await workspace.create(
                   data.profile,
