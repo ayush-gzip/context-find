@@ -60,6 +60,37 @@
   --hover: #ffffff08;
   --line-strong: #ffffff1f;
 }
+/* Motion and type, after Apple's guidance. --spring is a critically damped
+   spring (no bounce) with a 0.32 s response, sampled for CSS. */
+:root {
+  --spring: linear(
+    0,
+    0.118 6%,
+    0.329 13%,
+    0.527 19%,
+    0.682 25%,
+    0.793 31%,
+    0.868 38%,
+    0.917 44%,
+    0.949 50%,
+    0.969 56%,
+    0.981 63%,
+    0.989 69%,
+    0.993 75%,
+    0.996 81%,
+    0.998 88%,
+    0.999 94%,
+    1
+  );
+  --spring-dur: 0.48s;
+  /* Letter spacing by size: a little looser when small, tighter as text grows. */
+  --track-caption: 0.005em;
+  --track-body: -0.006em;
+  --track-title: -0.01em;
+  --track-headline: -0.015em;
+  --track-display: -0.02em;
+  --track-hero: -0.025em;
+}
 * {
   box-sizing: border-box;
 }
@@ -71,7 +102,7 @@ body {
     radial-gradient(70vh 60vh at 0 0, var(--tint-a), transparent),
     radial-gradient(60vh 70vh at 0 100%, var(--tint-b), transparent), var(--bg);
   background-attachment: fixed;
-  letter-spacing: -0.006em;
+  letter-spacing: var(--track-body);
 }
 button,
 input,
@@ -313,7 +344,10 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  /* Glass: the page shows through, blurred, as it scrolls under. */
+  background: color-mix(in srgb, var(--bg) 76%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  backdrop-filter: blur(20px) saturate(1.8);
 }
 .breadcrumb {
   display: flex;
@@ -387,7 +421,9 @@ textarea::placeholder {
   font-size: 12px;
   line-height: 1.4;
   white-space: nowrap;
-  transition: background 0.1s;
+  transition:
+    background 0.1s,
+    scale var(--spring-dur) var(--spring);
   height: 28px;
   font-weight: 500;
 }
@@ -417,6 +453,7 @@ textarea::placeholder {
   flex-shrink: 0;
   color: var(--secondary);
   font-size: 18px;
+  transition: scale var(--spring-dur) var(--spring);
 }
 .icon-button:hover {
   background: var(--hover);
@@ -437,7 +474,7 @@ main {
   font-size: 20px;
   line-height: 1.3;
   font-weight: 600;
-  letter-spacing: -0.3px;
+  letter-spacing: var(--track-display);
   margin: 0 0 2px;
 }
 .page-heading p {
@@ -500,14 +537,14 @@ main {
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.1px;
+  letter-spacing: var(--track-body);
 }
 .source-title small {
   display: block;
   font-size: 11px;
   color: var(--muted);
   font-weight: 400;
-  letter-spacing: 0;
+  letter-spacing: var(--track-caption);
   margin-top: 1px;
 }
 .source-logo {
@@ -540,12 +577,12 @@ main {
   font-size: 28px;
   line-height: 1.15;
   font-weight: 600;
-  letter-spacing: -0.8px;
+  letter-spacing: var(--track-hero);
   font-variant-numeric: tabular-nums;
 }
 .quota-number > span {
   font-size: 14px;
-  letter-spacing: 0;
+  letter-spacing: var(--track-title);
   margin-left: 1px;
   font-weight: 450;
   color: var(--secondary);
@@ -553,7 +590,7 @@ main {
 .quota-number.unavailable {
   font-size: 18px;
   line-height: 32px;
-  letter-spacing: -0.2px;
+  letter-spacing: var(--track-headline);
   font-weight: 500;
   color: var(--muted);
 }
@@ -644,7 +681,7 @@ main {
   align-items: center;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.1px;
+  letter-spacing: var(--track-body);
   margin: 0;
 }
 .panel-title > .faint {
@@ -683,13 +720,13 @@ main {
   font-weight: 450;
   color: var(--secondary);
   text-transform: none !important;
-  letter-spacing: 0;
+  letter-spacing: var(--track-caption);
 }
 .stat-value {
   font-size: 22px;
   line-height: 1.3;
   font-weight: 550;
-  letter-spacing: -0.5px;
+  letter-spacing: var(--track-display);
   font-variant-numeric: tabular-nums;
   margin-top: 0;
 }
@@ -879,7 +916,7 @@ main {
 .section-heading h2 {
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: -0.1px;
+  letter-spacing: var(--track-title);
   margin: 0;
 }
 .section-sub {
@@ -896,7 +933,7 @@ main {
   padding: 1px 6px;
   border-radius: 4px;
   margin-left: 6px;
-  letter-spacing: 0;
+  letter-spacing: var(--track-caption);
 }
 .canvas {
   position: relative;
@@ -921,7 +958,8 @@ main {
   min-width: 0;
   transition:
     border-color 0.1s,
-    background 0.1s;
+    background 0.1s,
+    scale var(--spring-dur) var(--spring);
 }
 .agent-card:hover {
   border-color: var(--line-strong);
@@ -968,7 +1006,7 @@ main {
   font-size: 13px;
   line-height: 1.4;
   font-weight: 500;
-  letter-spacing: -0.1px;
+  letter-spacing: var(--track-body);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1073,7 +1111,7 @@ main {
 }
 .empty h3 {
   font-size: 14px;
-  letter-spacing: -0.3px;
+  letter-spacing: var(--track-title);
   font-weight: 500;
   margin: 0 0 4px;
   color: var(--text);
@@ -1248,7 +1286,7 @@ tbody tr[data-session]:hover {
   font-size: 14px;
   font-weight: 550;
   margin: 12px 0 6px;
-  letter-spacing: -0.1px;
+  letter-spacing: var(--track-title);
 }
 .connection-card p {
   font-size: 12px;
@@ -1308,7 +1346,7 @@ tbody tr[data-session]:hover {
   padding: 0 16px;
   color: var(--muted);
   font-size: 11px;
-  letter-spacing: 0;
+  letter-spacing: var(--track-caption);
 }
 .statusbar .online-dot {
   height: 4px;
@@ -1390,7 +1428,7 @@ dialog::backdrop {
 dialog h2 {
   font-size: 16px;
   font-weight: 600;
-  letter-spacing: -0.2px;
+  letter-spacing: var(--track-headline);
   margin: 14px 0 8px;
 }
 dialog p {
@@ -1446,7 +1484,10 @@ html:has(.drawer.full:not([hidden])) {
   width: calc(100vw - var(--sidebar));
   border-left: 0;
   box-shadow: none;
-  transition: width 0.2s ease;
+  transition:
+    width 0.2s ease,
+    opacity 0.2s ease-out,
+    display 0.25s allow-discrete;
 }
 .drawer.full .drawer-head,
 .drawer.full .conversation,
@@ -2028,7 +2069,8 @@ html:has(.drawer.full:not([hidden])) {
   flex: none;
   transition:
     opacity 0.15s,
-    background 0.15s;
+    background 0.15s,
+    scale var(--spring-dur) var(--spring);
 }
 .round-button svg {
   width: 15px;
@@ -2759,10 +2801,33 @@ html:has(.drawer.full:not([hidden])) {
     font-size: 11px;
   }
 }
+/* Reduced motion: things fade in place instead of sliding, growing or spinning. */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation: none !important;
-    transition: none !important;
+  *,
+  *::before,
+  *::after {
+    scale: none !important;
+    translate: none !important;
+  }
+  .sidebar {
+    transition: opacity 0.2s ease;
+  }
+  .sidebar-hidden .sidebar {
+    transform: none;
+    transition:
+      opacity 0.2s ease,
+      visibility 0s 0.2s;
+  }
+  .shell {
+    transition: none;
+  }
+  .drawer.full {
+    transition:
+      opacity 0.2s ease-out,
+      display 0.25s allow-discrete;
+  }
+  .spinner {
+    animation: breathe 1.4s infinite;
   }
 }
 .child-card[role="button"] {
@@ -3099,4 +3164,212 @@ html:has(.drawer.full:not([hidden])) {
 }
 .mac-app .mac-only {
   display: revert;
+}
+/* Pressing answers at once; letting go springs back. */
+:is(.button, .icon-button, .round-button, .mode-button):active:not(:disabled) {
+  scale: 0.96;
+  transition-duration: 0.1s;
+  transition-timing-function: ease-out;
+}
+:is(.agent-card, .child-card[role="button"]):active:not(
+    :has(button:active, a:active)
+  ) {
+  scale: 0.985;
+  transition-duration: 0.1s;
+  transition-timing-function: ease-out;
+}
+.mode-button,
+.child-card[role="button"] {
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    scale var(--spring-dur) var(--spring);
+}
+:is(
+  .nav-item,
+  tbody tr[data-session],
+  .slash-item,
+  .select-menu button
+):active {
+  background: var(--selection);
+}
+/* Menus and dialogs grow from where they open and leave the same way. */
+.select-menu {
+  transform-origin: top left;
+  transition:
+    opacity 0.15s ease-out,
+    scale var(--spring-dur) var(--spring);
+}
+.select-menu.up {
+  transform-origin: bottom left;
+}
+@starting-style {
+  .select-menu:popover-open {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.slash-menu {
+  transform-origin: bottom left;
+  transition:
+    opacity 0.15s ease-out,
+    scale var(--spring-dur) var(--spring),
+    display 0.15s allow-discrete;
+}
+.slash-menu[hidden] {
+  opacity: 0;
+  scale: 0.97;
+}
+@starting-style {
+  .slash-menu {
+    opacity: 0;
+    scale: 0.97;
+  }
+}
+dialog {
+  transition:
+    opacity 0.18s ease-out,
+    scale var(--spring-dur) var(--spring),
+    display 0.18s allow-discrete,
+    overlay 0.18s allow-discrete;
+}
+dialog:not([open]) {
+  opacity: 0;
+  scale: 0.97;
+}
+/* The command menu drops from the top, where it sits. */
+.palette,
+.keys {
+  transform-origin: 50% 0;
+}
+dialog::backdrop {
+  transition:
+    opacity 0.18s ease-out,
+    display 0.18s allow-discrete,
+    overlay 0.18s allow-discrete;
+}
+dialog:not([open])::backdrop {
+  opacity: 0;
+}
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+    scale: 0.97;
+  }
+  dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+.toast {
+  transition:
+    opacity 0.2s ease-out,
+    translate var(--spring-dur) var(--spring),
+    display 0.2s allow-discrete;
+}
+.toast[hidden] {
+  opacity: 0;
+  translate: 0 8px;
+}
+@starting-style {
+  .toast {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* The side panel comes in from the right and goes back there; full screen fades. */
+.drawer {
+  transition:
+    opacity 0.2s ease-out,
+    translate var(--spring-dur) var(--spring),
+    display 0.25s allow-discrete;
+}
+.drawer[hidden] {
+  opacity: 0;
+}
+.drawer[hidden]:not(.full) {
+  translate: 32px 0;
+}
+@starting-style {
+  .drawer {
+    opacity: 0;
+  }
+  .drawer:not(.full) {
+    translate: 32px 0;
+  }
+}
+/* Scroll edges: a bar shows its line only while content is under it. With
+   nothing to scroll the timeline is inactive and the line stays away. */
+@keyframes edge-in {
+  from {
+    border-color: transparent;
+  }
+  to {
+    border-color: var(--line);
+  }
+}
+@keyframes edge-out {
+  from {
+    border-color: var(--line);
+  }
+  to {
+    border-color: transparent;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  .topbar {
+    border-bottom-color: transparent;
+    animation: edge-in linear both;
+    animation-timeline: scroll(root);
+    animation-range: 0 24px;
+  }
+}
+@supports (timeline-scope: --chat) {
+  .drawer {
+    timeline-scope: --chat;
+  }
+  .conversation {
+    scroll-timeline: --chat block;
+  }
+  .drawer-head {
+    border-bottom-color: transparent;
+    animation: edge-in linear both;
+    animation-timeline: --chat;
+    animation-range: 0 24px;
+  }
+  .composer {
+    border-top: 1px solid transparent;
+    animation: edge-out linear both;
+    animation-timeline: --chat;
+    animation-range: calc(100% - 24px) 100%;
+  }
+}
+/* Less transparency: solid surfaces. More contrast: solid, with clear lines. */
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar,
+  .topbar {
+    background: var(--bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  dialog::backdrop {
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  :root {
+    --line: #c4c4cc;
+    --line-strong: #a6a6b0;
+    --muted: #55555d;
+  }
+  :root[data-theme="dark"] {
+    --line: #ffffff40;
+    --line-strong: #ffffff5e;
+    --muted: #b6b6be;
+  }
+  .sidebar,
+  .topbar {
+    background: var(--bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }

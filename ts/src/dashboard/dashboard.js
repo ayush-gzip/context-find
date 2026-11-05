@@ -772,7 +772,10 @@ function closeDrawer() {
   watchChat();
   tellApp();
   $("#drawer").hidden = true;
-  $("#drawer").innerHTML = "";
+  // Emptied once it has slid away, unless a chat opened again.
+  setTimeout(() => {
+    if ($("#drawer").hidden) $("#drawer").innerHTML = "";
+  }, 300);
 }
 function openAgent(id, owned, profile) {
   if (owned) openView({ kind: "agent", id });
@@ -1494,7 +1497,7 @@ async function openTerminal() {
   S.workspace.agents = S.workspace.agents.filter((x) => x.id !== a.id);
   if (!s) {
     closeDrawer();
-    return toast("Opened in the tmux session cfind");
+    return toast("Opened in tmux");
   }
   S.opening = { path: s.path, until: Date.now() + 2 * 60 * 1000 };
   openSession(s);
@@ -2554,11 +2557,12 @@ function openMenu(select) {
   menu.style.minWidth = rect.width + "px";
   menu.style.left = Math.min(rect.left, innerWidth - rect.width - 8) + "px";
   menu.showPopover();
-  const below = rect.bottom + 6;
+  const below = rect.bottom + 6,
+    up = below + menu.offsetHeight > innerHeight - 8;
+  // It grows from the select, above or below it.
+  menu.classList.toggle("up", up);
   menu.style.top =
-    (below + menu.offsetHeight > innerHeight - 8
-      ? Math.max(8, rect.top - 6 - menu.offsetHeight)
-      : below) + "px";
+    (up ? Math.max(8, rect.top - 6 - menu.offsetHeight) : below) + "px";
   menu.addEventListener("toggle", (e) => {
     if (e.newState !== "closed") return;
     const back = menu.contains(document.activeElement);
